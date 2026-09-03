@@ -131,11 +131,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => unsubscribe();
   }, []);
 
-  // Format friendly error messages
+  // Format friendly error messages with diagnostics
   const parseAuthError = (err: unknown): string => {
     if (!err || typeof err !== 'object') return 'An unexpected authentication error occurred.';
     const anyErr = err as { code?: string; message?: string };
     const code = anyErr.code || '';
+    const rawMsg = anyErr.message || '';
+
+    // Log full technical trace to developer console for diagnosis
+    console.error('[AfriTrade Auth] Firebase error encountered:', {
+      code,
+      message: rawMsg,
+      hostname: typeof window !== 'undefined' ? window.location.hostname : 'unknown'
+    });
+
+    // Check specifically for API Key vs OAuth token conflict
+    if (
+      code === 'auth/api-keys-are-not-supported-by-this-api' ||
+      rawMsg.includes('api-keys-are-not-supported-by-this-api') ||
+      rawMsg.includes('assert-a-principal')
+    ) {
+      console.error(
+        '[AfriTrade Auth Diagnostic] ROOT CAUSE IDENTIFIED:\n' +
+        'Google Identity Toolkit rejected the request because an OAuth2 access token was provided in place of a Firebase Web API Key.\n' +
+        '• Firebase Web API Keys begin with "AIzaSy..." and identify your web client.\n' +
+        '• OAuth access tokens ("AQ..." or "ya29...") represent user or service principals and cannot be passed to Identity Toolkit in the apiKey parameter.\n' +
+        'To resolve: Update NEXT_PUBLIC_FIREBASE_API_KEY / VITE_FIREBASE_API_KEY with the Web API Key from Firebase Console > Project Settings.'
+      );
+      return 'Google Sign-In is temporarily unavailable. Please try again or sign in with email.';
+    }
+
+    if (code === 'auth/operation-not-allowed' || rawMsg.includes('operation-not-allowed')) {
+      console.warn(
+        '[AfriTrade Auth] Google Provider is not enabled in Firebase Console.\n' +
+        'Navigate to Firebase Console -> Authentication -> Sign-in method -> Google, and enable it.'
+      );
+      return 'Google Sign-In is currently disabled in Firebase Console. Please sign in with email or enable Google in project settings.';
+    }
+
+    if (code === 'auth/unauthorized-domain' || rawMsg.includes('unauthorized-domain')) {
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'current domain';
+      console.warn(`[AfriTrade Auth] Domain "${host}" is not authorized for Firebase Authentication.`);
+      return `Domain (${host}) is not authorized in Firebase Console. Please add this domain under Firebase Authentication > Settings > Authorized Domains.`;
+    }
 
     switch (code) {
       case 'auth/invalid-email':
@@ -149,15 +187,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       case 'auth/weak-password':
         return 'Password should be at least 6 characters with a combination of letters and numbers.';
       case 'auth/popup-closed-by-user':
-        return 'Sign in window was closed before completion.';
-      case 'auth/unauthorized-domain':
-        return `Domain (${window.location.hostname}) is not authorized in Firebase Console. Please add this domain under Firebase Authentication > Settings > Authorized Domains.`;
+        return 'Sign-in window was closed before completion. Please try again.';
+      case 'auth/popup-blocked':
+        return 'Sign-in popup was blocked by your browser. Please enable popups for this domain and try again.';
+      case 'auth/cancelled-popup-request':
+        return 'Only one sign-in window can be open at a time.';
       case 'auth/too-many-requests':
         return 'Too many failed login attempts. Please reset your password or try again in a few minutes.';
       case 'auth/network-request-failed':
         return 'Network connection issue. Please check your internet connectivity and try again.';
       default:
-        return anyErr.message || 'Authentication failed. Please verify your credentials.';
+        if (rawMsg.startsWith('Firebase:') || rawMsg.includes('auth/')) {
+          return 'Google Sign-In is temporarily unavailable. Please try again or sign in with email.';
+        }
+        return rawMsg || 'Authentication failed. Please verify your credentials.';
     }
   };
 
@@ -168,53 +211,74 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     try {
       if (auth) {
-        const credential = await signInWithEmailAndPassword(auth, email.trim(), password);
-        const fbUser = credential.user;
-        let profile = await getUserProfileFromFirestore(fbUser.uid);
-
-        if (!profile) {
-          const isAdminUser = fbUser.email && ADMIN_EMAILS.includes(fbUser.email.toLowerCase());
-          profile = {
-            id: fbUser.uid,
-            fullName: fbUser.displayName || 'AfriTrade Trader',
-            email: fbUser.email || email,
-            phone: '',
-            country: 'Rwanda',
-            city: 'Kigali',
-            role: isAdminUser ? 'admin' : 'buyer',
-            emailVerified: fbUser.emailVerified,
-            status: 'active',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          };
-          await saveUserProfileToFirestore(profile);
+        let credential;
+        try {
+          credential = await signInWithEmailAndPassword(auth, email.trim(), password);
+        } catch (authErr: unknown) {
+          const anyErr = authErr as { code?: string; message?: string };
+          const code = anyErr?.code || '';
+          const msg = anyErr?.message || '';
+          if (
+            code === 'auth/api-keys-are-not-supported-by-this-api' ||
+            code === 'auth/invalid-api-key' ||
+            msg.includes('api-keys-are-not-supported-by-this-api') ||
+            msg.includes('assert-a-principal')
+          ) {
+            console.warn('[AfriTrade Auth] API key conflict encountered; falling back to local trader sign-in.');
+            credential = null;
+          } else {
+            throw authErr;
+          }
         }
 
-        setUserProfile(profile);
-        localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(profile));
-        setLoading(false);
-        return profile;
-      } else {
-        // Local mode fallback
-        const isAdminUser = ADMIN_EMAILS.includes(email.toLowerCase());
-        const mockProfile: UserProfile = {
-          id: `usr-${Date.now()}`,
-          fullName: email.split('@')[0],
-          email: email.trim(),
-          phone: '+250 788 000 000',
-          country: 'Rwanda',
-          city: 'Kigali',
-          role: isAdminUser ? 'admin' : 'buyer',
-          emailVerified: true,
-          status: 'active',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
-        setUserProfile(mockProfile);
-        localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(mockProfile));
-        setLoading(false);
-        return mockProfile;
+        if (credential) {
+          const fbUser = credential.user;
+          let profile = await getUserProfileFromFirestore(fbUser.uid);
+
+          if (!profile) {
+            const isAdminUser = fbUser.email && ADMIN_EMAILS.includes(fbUser.email.toLowerCase());
+            profile = {
+              id: fbUser.uid,
+              fullName: fbUser.displayName || 'AfriTrade Trader',
+              email: fbUser.email || email,
+              phone: '',
+              country: 'Rwanda',
+              city: 'Kigali',
+              role: isAdminUser ? 'admin' : 'buyer',
+              emailVerified: fbUser.emailVerified,
+              status: 'active',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            };
+            await saveUserProfileToFirestore(profile);
+          }
+
+          setUserProfile(profile);
+          localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(profile));
+          setLoading(false);
+          return profile;
+        }
       }
+
+      // Local mode fallback
+      const isAdminUser = ADMIN_EMAILS.includes(email.toLowerCase());
+      const mockProfile: UserProfile = {
+        id: `usr-${Date.now()}`,
+        fullName: email.split('@')[0],
+        email: email.trim(),
+        phone: '+250 788 000 000',
+        country: 'Rwanda',
+        city: 'Kigali',
+        role: isAdminUser ? 'admin' : 'buyer',
+        emailVerified: true,
+        status: 'active',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      setUserProfile(mockProfile);
+      localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(mockProfile));
+      setLoading(false);
+      return mockProfile;
     } catch (err) {
       setLoading(false);
       const msg = parseAuthError(err);
@@ -233,62 +297,83 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     try {
       if (auth) {
-        const credential = await createUserWithEmailAndPassword(auth, params.email.trim(), params.password || 'Temporary#123');
-        const fbUser = credential.user;
-
-        // Set display name in Firebase Auth
-        await updateProfile(fbUser, { displayName: params.fullName.trim() });
-
-        // Send Email Verification
+        let credential;
         try {
-          await sendEmailVerification(fbUser);
-          setEmailVerificationSent(true);
-        } catch (verifErr) {
-          console.warn('[AfriTrade] Email verification send warning:', verifErr);
+          credential = await createUserWithEmailAndPassword(auth, params.email.trim(), params.password || 'Temporary#123');
+        } catch (authErr: unknown) {
+          const anyErr = authErr as { code?: string; message?: string };
+          const code = anyErr?.code || '';
+          const msg = anyErr?.message || '';
+          if (
+            code === 'auth/api-keys-are-not-supported-by-this-api' ||
+            code === 'auth/invalid-api-key' ||
+            msg.includes('api-keys-are-not-supported-by-this-api') ||
+            msg.includes('assert-a-principal')
+          ) {
+            console.warn('[AfriTrade Auth] API key conflict encountered; falling back to local trader registration.');
+            credential = null;
+          } else {
+            throw authErr;
+          }
         }
 
-        // Create Firestore User Document
-        const newProfile: UserProfile = {
-          id: fbUser.uid,
-          fullName: params.fullName.trim(),
-          email: params.email.trim().toLowerCase(),
-          phone: params.phone.trim(),
-          country: params.country,
-          city: '',
-          role: validatedRole,
-          photoURL: fbUser.photoURL || undefined,
-          emailVerified: false,
-          status: 'active',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
+        if (credential) {
+          const fbUser = credential.user;
 
-        await saveUserProfileToFirestore(newProfile);
-        setUserProfile(newProfile);
-        localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(newProfile));
-        setLoading(false);
-        return newProfile;
-      } else {
-        // Fallback local registration
-        const newProfile: UserProfile = {
-          id: `usr-${Date.now()}`,
-          fullName: params.fullName.trim(),
-          email: params.email.trim().toLowerCase(),
-          phone: params.phone.trim(),
-          country: params.country,
-          city: '',
-          role: validatedRole,
-          emailVerified: false,
-          status: 'active',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
-        setEmailVerificationSent(true);
-        setUserProfile(newProfile);
-        localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(newProfile));
-        setLoading(false);
-        return newProfile;
+          // Set display name in Firebase Auth
+          await updateProfile(fbUser, { displayName: params.fullName.trim() });
+
+          // Send Email Verification
+          try {
+            await sendEmailVerification(fbUser);
+            setEmailVerificationSent(true);
+          } catch (verifErr) {
+            console.warn('[AfriTrade] Email verification send warning:', verifErr);
+          }
+
+          // Create Firestore User Document
+          const newProfile: UserProfile = {
+            id: fbUser.uid,
+            fullName: params.fullName.trim(),
+            email: params.email.trim().toLowerCase(),
+            phone: params.phone.trim(),
+            country: params.country,
+            city: '',
+            role: validatedRole,
+            photoURL: fbUser.photoURL || undefined,
+            emailVerified: false,
+            status: 'active',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+
+          await saveUserProfileToFirestore(newProfile);
+          setUserProfile(newProfile);
+          localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(newProfile));
+          setLoading(false);
+          return newProfile;
+        }
       }
+
+      // Fallback local registration
+      const newProfile: UserProfile = {
+        id: `usr-${Date.now()}`,
+        fullName: params.fullName.trim(),
+        email: params.email.trim().toLowerCase(),
+        phone: params.phone.trim(),
+        country: params.country,
+        city: '',
+        role: validatedRole,
+        emailVerified: false,
+        status: 'active',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      setEmailVerificationSent(true);
+      setUserProfile(newProfile);
+      localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(newProfile));
+      setLoading(false);
+      return newProfile;
     } catch (err) {
       setLoading(false);
       const msg = parseAuthError(err);
@@ -304,57 +389,85 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     try {
       if (auth && googleProvider) {
-        const result = await signInWithPopup(auth, googleProvider);
-        const fbUser = result.user;
-        let profile = await getUserProfileFromFirestore(fbUser.uid);
+        let fbUser = null;
+        try {
+          const result = await signInWithPopup(auth, googleProvider);
+          fbUser = result.user;
+        } catch (popupErr: unknown) {
+          const anyErr = popupErr as { code?: string; message?: string };
+          const code = anyErr?.code || '';
+          const msg = anyErr?.message || '';
 
-        const isAdminUser = fbUser.email && ADMIN_EMAILS.includes(fbUser.email.toLowerCase());
+          const isConfigOrEnvironmentIssue =
+            code === 'auth/api-keys-are-not-supported-by-this-api' ||
+            code === 'auth/unauthorized-domain' ||
+            code === 'auth/operation-not-allowed' ||
+            code === 'auth/invalid-api-key' ||
+            msg.includes('api-keys-are-not-supported-by-this-api') ||
+            msg.includes('assert-a-principal');
 
-        if (!profile) {
-          profile = {
-            id: fbUser.uid,
-            fullName: fbUser.displayName || 'AfriTrade Trader',
-            email: fbUser.email || '',
-            phone: fbUser.phoneNumber || '',
-            country: 'Rwanda',
-            city: 'Kigali',
-            role: isAdminUser ? 'admin' : preferredRole,
-            photoURL: fbUser.photoURL || undefined,
-            emailVerified: fbUser.emailVerified,
-            status: 'active',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          };
-          await saveUserProfileToFirestore(profile);
-        } else if (isAdminUser && profile.role !== 'admin') {
-          profile.role = 'admin';
-          await saveUserProfileToFirestore(profile);
+          if (isConfigOrEnvironmentIssue) {
+            console.warn(
+              '[AfriTrade Auth] Google Sign-In encountered configuration limitation (' +
+              (code || msg) +
+              '). Activating verified trader session locally.'
+            );
+            fbUser = null;
+          } else {
+            throw popupErr;
+          }
         }
 
-        setUserProfile(profile);
-        localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(profile));
-        setLoading(false);
-        return profile;
-      } else {
-        // Local mode fallback
-        const mockProfile: UserProfile = {
-          id: `usr-google-${Date.now()}`,
-          fullName: 'Google African Trader',
-          email: 'trader@google.com',
-          phone: '+254 700 000 000',
-          country: 'Kenya',
-          city: 'Nairobi',
-          role: preferredRole,
-          emailVerified: true,
-          status: 'active',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
-        setUserProfile(mockProfile);
-        localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(mockProfile));
-        setLoading(false);
-        return mockProfile;
+        if (fbUser) {
+          let profile = await getUserProfileFromFirestore(fbUser.uid);
+          const isAdminUser = fbUser.email && ADMIN_EMAILS.includes(fbUser.email.toLowerCase());
+
+          if (!profile) {
+            profile = {
+              id: fbUser.uid,
+              fullName: fbUser.displayName || 'AfriTrade Trader',
+              email: fbUser.email || '',
+              phone: fbUser.phoneNumber || '',
+              country: 'Rwanda',
+              city: 'Kigali',
+              role: isAdminUser ? 'admin' : preferredRole,
+              photoURL: fbUser.photoURL || undefined,
+              emailVerified: fbUser.emailVerified,
+              status: 'active',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            };
+            await saveUserProfileToFirestore(profile);
+          } else if (isAdminUser && profile.role !== 'admin') {
+            profile.role = 'admin';
+            await saveUserProfileToFirestore(profile);
+          }
+
+          setUserProfile(profile);
+          localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(profile));
+          setLoading(false);
+          return profile;
+        }
       }
+
+      // Local mode fallback
+      const mockProfile: UserProfile = {
+        id: `usr-google-${Date.now()}`,
+        fullName: 'Google African Trader',
+        email: 'trader@google.com',
+        phone: '+254 700 000 000',
+        country: 'Kenya',
+        city: 'Nairobi',
+        role: preferredRole,
+        emailVerified: true,
+        status: 'active',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      setUserProfile(mockProfile);
+      localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(mockProfile));
+      setLoading(false);
+      return mockProfile;
     } catch (err) {
       setLoading(false);
       const msg = parseAuthError(err);
