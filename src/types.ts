@@ -11,9 +11,22 @@ export interface UserProfile {
   businessName?: string;
   businessId?: string;
   photoURL?: string;
+  emailVerified?: boolean;
   createdAt: string;
   updatedAt: string;
   status: 'active' | 'suspended';
+}
+
+export interface SellerBusinessSetupData {
+  businessName: string;
+  description: string;
+  category: string;
+  country: string;
+  city: string;
+  phone: string;
+  email: string;
+  website?: string;
+  logo?: string;
 }
 
 export type VerificationStatus = 'unverified' | 'pending' | 'verified' | 'suspended';

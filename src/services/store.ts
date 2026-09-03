@@ -92,7 +92,7 @@ function setLocalData<T>(key: string, value: T): void {
 
 export function useAppStore() {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => 
-    getLocalData<UserProfile | null>(STORAGE_KEYS.USER, DEMO_USERS.buyer)
+    getLocalData<UserProfile | null>(STORAGE_KEYS.USER, null)
   );
 
   const [currentCurrency, setCurrentCurrency] = useState<string>(() =>

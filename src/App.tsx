@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useAuth } from './context/AuthContext';
 import { useAppStore } from './services/store';
 import { Navbar } from './components/Navbar';
 import { HomeView } from './components/HomeView';
@@ -16,18 +17,41 @@ import { AdminDashboardView } from './components/AdminDashboardView';
 import { MessagesView } from './components/MessagesView';
 import { CartDrawer } from './components/CartDrawer';
 import { QuotationModal } from './components/QuotationModal';
-import { AuthModal } from './components/AuthModal';
+import { LoginView } from './components/LoginView';
+import { RegisterView } from './components/RegisterView';
+import { SellerBusinessSetupView } from './components/SellerBusinessSetupView';
+import { ForgotPasswordView } from './components/ForgotPasswordView';
+import { AboutView } from './components/AboutView';
+import { HowItWorksView } from './components/HowItWorksView';
+import { PrivacyPolicyView, TermsOfServiceView } from './components/LegalViews';
+import { ProfileView } from './components/ProfileView';
+import { AuthGateModal } from './components/AuthGateModal';
 import { Product, UserRole } from './types';
 import { LanguageCode } from './i18n';
 import { 
-  Sparkles, TrendingUp, ShieldCheck, Globe, 
-  Activity, ArrowUpRight, Cpu, Layers 
+  Globe, ShieldAlert, ArrowLeft, 
+  Lock, AlertTriangle, CheckCircle2, ShieldCheck
 } from 'lucide-react';
 
+const PUBLIC_VIEWS = new Set([
+  'home',
+  'about',
+  'how-it-works',
+  'login',
+  'register',
+  'forgot-password',
+  'privacy-policy',
+  'terms-of-service',
+]);
+
 export default function App() {
+  const authState = useAuth();
   const store = useAppStore();
 
   const [activeView, setActiveView] = useState<string>('home');
+  const [redirectTarget, setRedirectTarget] = useState<string | null>(null);
+
+  // Selected item states
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [selectedBusinessId, setSelectedBusinessId] = useState<string | null>(null);
 
@@ -46,20 +70,91 @@ export default function App() {
 
   // Modals & Drawers
   const [isCartOpen, setIsCartOpen] = useState(false);
-  const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [isQuoteOpen, setIsQuoteOpen] = useState(false);
   const [quoteProduct, setQuoteProduct] = useState<Product | null>(null);
 
-  // Handlers
+  // Reusable Auth Gate Modal
+  const [authGateModal, setAuthGateModal] = useState<{
+    isOpen: boolean;
+    featureTitle: string;
+    featureDescription: string;
+    targetView: string;
+  }>({
+    isOpen: false,
+    featureTitle: '',
+    featureDescription: '',
+    targetView: 'marketplace'
+  });
+
+  // Keep store's currentUser in sync with AuthContext's userProfile
+  useEffect(() => {
+    if (authState.userProfile) {
+      store.loginUser(authState.userProfile);
+    } else {
+      store.logoutUser();
+    }
+  }, [authState.userProfile]);
+
+  // Navigate with view change and smooth scroll
+  const navigateTo = (view: string, targetParam?: string) => {
+    // Check if view is protected and user is unauthenticated
+    if (!authState.isAuthenticated && !PUBLIC_VIEWS.has(view)) {
+      setRedirectTarget(view);
+      setActiveView('login');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    setActiveView(view);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Auth success callback
+  const handleAuthSuccess = (target?: string) => {
+    const destination = target || redirectTarget;
+    setRedirectTarget(null);
+
+    if (destination && !PUBLIC_VIEWS.has(destination)) {
+      setActiveView(destination);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    // Role-based default destination
+    if (authState.role === 'seller') {
+      if (authState.userProfile?.businessId) {
+        setActiveView('seller');
+      } else {
+        setActiveView('seller-business-setup');
+      }
+    } else if (authState.role === 'admin') {
+      setActiveView('admin');
+    } else {
+      setActiveView('buyer');
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Navigation handlers with auth gates
   const handleOpenProduct = (productId: string) => {
     setSelectedProductId(productId);
-    setActiveView('product-detail');
+    if (!authState.isAuthenticated) {
+      setRedirectTarget('product-detail');
+      setActiveView('login');
+    } else {
+      setActiveView('product-detail');
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleOpenBusiness = (businessId: string) => {
     setSelectedBusinessId(businessId);
-    setActiveView('business-detail');
+    if (!authState.isAuthenticated) {
+      setRedirectTarget('business-detail');
+      setActiveView('login');
+    } else {
+      setActiveView('business-detail');
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -67,7 +162,13 @@ export default function App() {
     if (search !== undefined) setMarketSearch(search);
     if (categoryId !== undefined) setMarketCategory(categoryId);
     if (countryName !== undefined) setMarketCountry(countryName);
-    setActiveView('marketplace');
+
+    if (!authState.isAuthenticated) {
+      setRedirectTarget('marketplace');
+      setActiveView('login');
+    } else {
+      setActiveView('marketplace');
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -76,8 +177,19 @@ export default function App() {
     if (origin) setTradeOrigin(origin);
     if (dest) setTradeDest(dest);
     if (prod) setTradeProduct(prod);
-    setActiveView('ai-trade-assistant');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    if (!authState.isAuthenticated) {
+      // Requirement 16: Show gate with specific text
+      setAuthGateModal({
+        isOpen: true,
+        featureTitle: 'AI Trade Assistant',
+        featureDescription: 'Create your free AfriTrade AI account to use the AI Trade Assistant.',
+        targetView: 'ai-trade-assistant'
+      });
+    } else {
+      setActiveView('ai-trade-assistant');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   };
 
   const handleOpenCalculator = (origin?: string, dest?: string, price?: number, qty?: number) => {
@@ -85,7 +197,13 @@ export default function App() {
     if (dest) setTradeDest(dest);
     if (price) setTradePrice(price);
     if (qty) setTradeQty(qty);
-    setActiveView('trade-calculator');
+
+    if (!authState.isAuthenticated) {
+      setRedirectTarget('trade-calculator');
+      setActiveView('login');
+    } else {
+      setActiveView('trade-calculator');
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -93,21 +211,73 @@ export default function App() {
     if (origin) setTradeOrigin(origin);
     if (dest) setTradeDest(dest);
     if (product) setTradeProduct(product);
-    setActiveView('trade-documents');
+
+    if (!authState.isAuthenticated) {
+      setRedirectTarget('trade-documents');
+      setActiveView('login');
+    } else {
+      setActiveView('trade-documents');
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  // E-commerce action gates (Add to Cart, RFQ, Messages, Favorites)
+  const handleAddToCart = (product: Product, quantity: number) => {
+    if (!authState.isAuthenticated) {
+      setAuthGateModal({
+        isOpen: true,
+        featureTitle: 'Add to Wholesale Cart',
+        featureDescription: 'Create your free AfriTrade AI account or sign in to build your commodity shipment order.',
+        targetView: 'marketplace'
+      });
+      return;
+    }
+    store.addToCart(product, quantity);
+    setIsCartOpen(true);
+  };
+
   const handleRequestQuote = (product: Product) => {
+    if (!authState.isAuthenticated) {
+      setAuthGateModal({
+        isOpen: true,
+        featureTitle: 'Request Commercial Quotation',
+        featureDescription: 'Create your free account or sign in to tender wholesale requests for quotation to African producers.',
+        targetView: selectedProductId ? 'product-detail' : 'marketplace'
+      });
+      return;
+    }
     setQuoteProduct(product);
     setIsQuoteOpen(true);
   };
 
   const handleContactSeller = (sellerId: string, sellerName: string, productId?: string, productName?: string) => {
+    if (!authState.isAuthenticated) {
+      setAuthGateModal({
+        isOpen: true,
+        featureTitle: 'Contact African Seller',
+        featureDescription: 'Sign in or create an account to initiate direct commercial negotiations.',
+        targetView: 'messages'
+      });
+      return;
+    }
     const initialText = productName 
       ? `Greetings! I am interested in sourcing ${productName} through AfriTrade. Can you provide wholesale delivery terms?`
       : `Hello! I would like to inquire regarding your cross-border export inventory.`;
     store.sendMessage(sellerId, sellerName, initialText);
     setActiveView('messages');
+  };
+
+  const handleToggleFavorite = (productId: string) => {
+    if (!authState.isAuthenticated) {
+      setAuthGateModal({
+        isOpen: true,
+        featureTitle: 'Save to Favorites',
+        featureDescription: 'Create your free account or sign in to bookmark verified commodities and producers.',
+        targetView: activeView
+      });
+      return;
+    }
+    store.toggleFavorite('product', productId);
   };
 
   // Currently selected product or business for details
@@ -117,6 +287,29 @@ export default function App() {
 
   // Derive unread count for current user
   const unreadNotifs = store.notifications.filter(n => store.currentUser ? n.userId === store.currentUser.id && !n.read : false).length;
+
+  // Requirement 20: Loading States - prevent authentication flicker
+  if (authState.loading) {
+    return (
+      <div className="min-h-screen bg-[#09090b] flex flex-col items-center justify-center text-zinc-100 font-sans p-4">
+        <div className="w-12 h-12 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-emerald-400 mb-4 shadow-xl">
+          <Globe className="w-6 h-6 animate-spin" />
+        </div>
+        <div className="text-center space-y-1">
+          <h2 className="text-sm font-bold tracking-tight text-white font-display">
+            AfriTrade AI
+          </h2>
+          <p className="text-xs font-mono text-zinc-400">
+            Verifying AfCFTA Authentication Credentials...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Active view rendering check
+  const isCurrentViewProtected = !PUBLIC_VIEWS.has(activeView);
+  const showLoginGate = isCurrentViewProtected && !authState.isAuthenticated;
 
   return (
     <div className="min-h-screen bg-[#09090b] text-zinc-100 flex flex-col font-sans selection:bg-zinc-800 selection:text-zinc-100">
@@ -142,239 +335,396 @@ export default function App() {
         </div>
       </div>
 
+      {/* Email verification notice banner if logged in without verified email */}
+      {authState.isAuthenticated && authState.userProfile && !authState.userProfile.emailVerified && (
+        <div className="bg-amber-950/70 border-b border-amber-800/80 px-4 py-2 text-xs text-amber-200 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              <strong>Email Verification Recommended:</strong> Verify your email address for secure AfCFTA customs clearance and full features.
+            </span>
+          </div>
+          <button
+            onClick={authState.resendVerificationEmail}
+            className="px-2.5 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-[11px] font-semibold transition shrink-0"
+          >
+            {authState.emailVerificationSent ? 'Verification Sent!' : 'Resend Email'}
+          </button>
+        </div>
+      )}
+
       {/* Main Navbar */}
       <Navbar
-        currentUser={store.currentUser}
+        currentUser={authState.userProfile}
         currentCurrency={store.currentCurrency}
         currentLang={store.currentLang as LanguageCode}
         cartCount={store.cart.reduce((acc, it) => acc + it.quantity, 0)}
         unreadNotifsCount={unreadNotifs}
         activeView={activeView}
-        onSelectView={(v) => {
-          setActiveView(v);
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
+        onSelectView={navigateTo}
         onSelectCurrency={store.setCurrentCurrency}
         onSelectLanguage={store.setCurrentLang}
-        onSwitchRole={store.switchUserRole}
-        onOpenCart={() => setIsCartOpen(true)}
-        onOpenAuth={() => setIsAuthOpen(true)}
-        onLogout={store.logoutUser}
+        onOpenCart={() => {
+          if (!authState.isAuthenticated) {
+            setAuthGateModal({
+              isOpen: true,
+              featureTitle: 'Wholesale Trade Cart',
+              featureDescription: 'Sign in or create an account to view and manage your cart.',
+              targetView: 'cart'
+            });
+            return;
+          }
+          setIsCartOpen(true);
+        }}
+        onOpenLogin={() => {
+          setRedirectTarget(activeView);
+          setActiveView('login');
+        }}
+        onOpenRegister={() => {
+          setRedirectTarget(activeView);
+          setActiveView('register');
+        }}
+        onLogout={async () => {
+          await authState.signOut();
+          setActiveView('home');
+        }}
       />
 
       {/* Main Application Canvas */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-2.5 sm:px-4 py-4 sm:py-6">
-        {activeView === 'home' && (
-          <HomeView
-            products={store.products}
-            businesses={store.businesses}
-            countries={store.countries}
-            categories={store.categories}
-            currentCurrency={store.currentCurrency}
-            onExploreMarketplace={handleExploreMarketplace}
-            onOpenProduct={handleOpenProduct}
-            onOpenBusiness={handleOpenBusiness}
-            onLaunchAiTrade={handleLaunchAiTrade}
+        {/* If the current requested view is protected and the user is NOT authenticated, display LoginView with Gate banner */}
+        {showLoginGate ? (
+          <LoginView
+            redirectTarget={activeView}
+            onNavigate={setActiveView}
+            onSuccess={handleAuthSuccess}
           />
-        )}
+        ) : (
+          <>
+            {/* 1. PUBLIC VIEWS */}
+            {activeView === 'home' && (
+              <HomeView
+                products={store.products}
+                businesses={store.businesses}
+                countries={store.countries}
+                categories={store.categories}
+                currentCurrency={store.currentCurrency}
+                onExploreMarketplace={handleExploreMarketplace}
+                onOpenProduct={handleOpenProduct}
+                onOpenBusiness={handleOpenBusiness}
+                onLaunchAiTrade={handleLaunchAiTrade}
+              />
+            )}
 
-        {activeView === 'marketplace' && (
-          <MarketplaceView
-            products={store.products}
-            categories={store.categories}
-            countries={store.countries}
-            currentCurrency={store.currentCurrency}
-            initialSearch={marketSearch}
-            initialCategory={marketCategory}
-            initialCountry={marketCountry}
-            onOpenProduct={handleOpenProduct}
-            onRequestQuotation={handleRequestQuote}
-            onAskAiProduct={(prod) => handleLaunchAiTrade(`What are the customs duties, required certs, and shipping corridors to import ${prod.name} from ${prod.country}?`, prod.country, 'Kenya', prod.name)}
-            onToggleFavorite={(id) => store.toggleFavorite('product', id)}
-            isFavorite={(id) => store.isFavorite('product', id)}
-          />
-        )}
+            {activeView === 'about' && (
+              <AboutView onNavigate={navigateTo} />
+            )}
 
-        {activeView === 'product-detail' && selectedProduct && (
-          <ProductDetailView
-            product={selectedProduct}
-            business={selectedBusiness}
-            reviews={store.reviews.filter(r => r.productId === selectedProduct.id)}
-            currentUser={store.currentUser}
-            currentCurrency={store.currentCurrency}
-            onBack={() => setActiveView('marketplace')}
-            onAddToCart={(prod, qty) => store.addToCart(prod, qty)}
-            onRequestQuotation={handleRequestQuote}
-            onContactSeller={(sellerId, sellerName, prodId, prodName) => handleContactSeller(sellerId, sellerName, prodId, prodName)}
-            onAskAi={(prompt, orig, dest, prod) => handleLaunchAiTrade(prompt, orig, dest, prod)}
-            onToggleFavorite={(id) => store.toggleFavorite('product', id)}
-            isFavorite={store.isFavorite('product', selectedProduct.id)}
-            onAddReview={(rating, comment) => {
-              if (store.currentUser) {
-                store.addReview({
-                  buyerId: store.currentUser.id,
-                  buyerName: store.currentUser.fullName,
-                  sellerId: selectedProduct.sellerId,
-                  productId: selectedProduct.id,
-                  orderId: 'ord-verified',
-                  rating,
-                  comment
-                });
-              }
-            }}
-          />
-        )}
+            {activeView === 'how-it-works' && (
+              <HowItWorksView onNavigate={navigateTo} />
+            )}
 
-        {activeView === 'business-detail' && selectedBusiness && (
-          <BusinessProfileView
-            business={selectedBusiness}
-            products={store.products}
-            currentCurrency={store.currentCurrency}
-            onBack={() => setActiveView('marketplace')}
-            onOpenProduct={handleOpenProduct}
-            onContactSeller={(sellerId, sellerName) => handleContactSeller(sellerId, sellerName)}
-            onRequestQuoteProduct={handleRequestQuote}
-          />
-        )}
+            {activeView === 'privacy-policy' && (
+              <PrivacyPolicyView onNavigate={navigateTo} />
+            )}
 
-        {activeView === 'ai-trade-assistant' && (
-          <AITradeAssistantView
-            countries={store.countries}
-            initialPrompt={assistantPrompt}
-            initialOrigin={tradeOrigin}
-            initialDestination={tradeDest}
-            initialProduct={tradeProduct}
-            onOpenCalculator={(orig, dest) => handleOpenCalculator(orig, dest)}
-            onOpenDocuments={(orig, dest, prod) => handleOpenDocuments(orig, dest, prod)}
-            onOpenMatching={(q) => {
-              setActiveView('matching');
-            }}
-          />
-        )}
+            {activeView === 'terms-of-service' && (
+              <TermsOfServiceView onNavigate={navigateTo} />
+            )}
 
-        {activeView === 'market-discovery' && (
-          <MarketDiscoveryView
-            countries={store.countries}
-            categories={store.categories}
-            onLaunchAssistantWithMarket={(prod, orig, dest) => handleLaunchAiTrade(`Analyze market entry strategy for exporting ${prod} from ${orig} to ${dest} under AfCFTA`, orig, dest, prod)}
-          />
-        )}
+            {activeView === 'login' && (
+              <LoginView
+                redirectTarget={redirectTarget}
+                onNavigate={setActiveView}
+                onSuccess={handleAuthSuccess}
+              />
+            )}
 
-        {activeView === 'matching' && (
-          <MatchingView
-            businesses={store.businesses}
-            products={store.products}
-            countries={store.countries}
-            categories={store.categories}
-            onOpenBusiness={handleOpenBusiness}
-            onRequestQuoteBusiness={(biz) => {
-              const firstBizProd = store.products.find(p => p.businessId === biz.businessId);
-              if (firstBizProd) handleRequestQuote(firstBizProd);
-            }}
-            onContactBusiness={(sellerId, bizName) => handleContactSeller(sellerId, bizName)}
-          />
-        )}
+            {activeView === 'register' && (
+              <RegisterView
+                onNavigate={setActiveView}
+                onRegisteredBuyer={() => {
+                  handleAuthSuccess(redirectTarget || 'buyer');
+                }}
+                onRegisteredSeller={() => {
+                  setActiveView('seller-business-setup');
+                }}
+              />
+            )}
 
-        {activeView === 'trade-calculator' && (
-          <TradeCalculatorView
-            countries={store.countries}
-            currentCurrency={store.currentCurrency}
-            initialOrigin={tradeOrigin}
-            initialDestination={tradeDest}
-            initialPrice={tradePrice}
-            initialQuantity={tradeQty}
-            onOpenDocuments={(orig, dest) => handleOpenDocuments(orig, dest)}
-          />
-        )}
+            {activeView === 'forgot-password' && (
+              <ForgotPasswordView onNavigate={setActiveView} />
+            )}
 
-        {activeView === 'trade-documents' && (
-          <TradeDocumentsView
-            countries={store.countries}
-            categories={store.categories}
-            initialOrigin={tradeOrigin}
-            initialDestination={tradeDest}
-            initialProduct={tradeProduct}
-          />
-        )}
+            {activeView === 'seller-business-setup' && (
+              <SellerBusinessSetupView
+                onSuccess={() => {
+                  setActiveView('seller');
+                }}
+              />
+            )}
 
-        {activeView === 'buyer' && store.currentUser && (
-          <BuyerDashboardView
-            currentUser={store.currentUser}
-            orders={store.orders}
-            quotations={store.quotations}
-            products={store.products}
-            businesses={store.businesses}
-            currentCurrency={store.currentCurrency}
-            onOpenProduct={handleOpenProduct}
-            onOpenBusiness={handleOpenBusiness}
-            onAcceptQuotation={(qId) => store.acceptQuotation(qId)}
-            onOpenMessages={() => setActiveView('messages')}
-            onExploreMarketplace={() => setActiveView('marketplace')}
-          />
-        )}
+            {/* 2. PROTECTED VIEWS */}
+            {activeView === 'marketplace' && (
+              <MarketplaceView
+                products={store.products}
+                categories={store.categories}
+                countries={store.countries}
+                currentCurrency={store.currentCurrency}
+                initialSearch={marketSearch}
+                initialCategory={marketCategory}
+                initialCountry={marketCountry}
+                onOpenProduct={handleOpenProduct}
+                onRequestQuotation={handleRequestQuote}
+                onAskAiProduct={(prod) => handleLaunchAiTrade(
+                  `What are the customs duties, required certs, and shipping corridors to import ${prod.name} from ${prod.country}?`,
+                  prod.country,
+                  'Kenya',
+                  prod.name
+                )}
+                onToggleFavorite={handleToggleFavorite}
+                isFavorite={(id) => store.isFavorite('product', id)}
+              />
+            )}
 
-        {activeView === 'seller' && store.currentUser && (
-          <SellerDashboardView
-            currentUser={store.currentUser}
-            sellerBusiness={store.businesses.find(b => b.businessId === store.currentUser?.businessId)}
-            products={store.products}
-            orders={store.orders}
-            quotations={store.quotations}
-            categories={store.categories}
-            countries={store.countries}
-            currentCurrency={store.currentCurrency}
-            onAddProduct={(prodData) => store.addProduct(prodData)}
-            onUpdateProduct={(pId, updates) => store.updateProduct(pId, updates)}
-            onDeleteProduct={(pId) => store.deleteProduct(pId)}
-            onUpdateOrderStatus={(oId, stat, trk) => store.updateOrderStatus(oId, stat, trk)}
-            onRespondQuotation={(qId, res) => store.respondToQuotation(qId, {
-              offeredUnitPrice: res.unitPrice,
-              shippingEstimate: res.shippingQuote,
-              estimatedDeliveryTime: res.leadTimeDays,
-              sellerNotes: res.notes
-            })}
-          />
-        )}
+            {activeView === 'product-detail' && selectedProduct && (
+              <ProductDetailView
+                product={selectedProduct}
+                business={selectedBusiness}
+                reviews={store.reviews.filter(r => r.productId === selectedProduct.id)}
+                currentUser={store.currentUser}
+                currentCurrency={store.currentCurrency}
+                onBack={() => setActiveView('marketplace')}
+                onAddToCart={handleAddToCart}
+                onRequestQuotation={handleRequestQuote}
+                onContactSeller={handleContactSeller}
+                onAskAi={(prompt, orig, dest, prod) => handleLaunchAiTrade(prompt, orig, dest, prod)}
+                onToggleFavorite={handleToggleFavorite}
+                isFavorite={store.isFavorite('product', selectedProduct.id)}
+                onAddReview={(rating, comment) => {
+                  if (store.currentUser) {
+                    store.addReview({
+                      buyerId: store.currentUser.id,
+                      buyerName: store.currentUser.fullName,
+                      sellerId: selectedProduct.sellerId,
+                      productId: selectedProduct.id,
+                      orderId: 'ord-verified',
+                      rating,
+                      comment
+                    });
+                  }
+                }}
+              />
+            )}
 
-        {activeView === 'admin' && store.currentUser && (
-          <AdminDashboardView
-            currentUser={store.currentUser}
-            businesses={store.businesses}
-            products={store.products}
-            orders={store.orders}
-            currentCurrency={store.currentCurrency}
-            onVerifyBusiness={(bId) => store.setBusinessVerification(bId, 'verified')}
-            onSuspendBusiness={(bId) => store.setBusinessVerification(bId, 'suspended')}
-            onToggleProductStatus={(pId) => {
-              const p = store.products.find(x => x.id === pId);
-              if (p) store.updateProduct(pId, { status: p.status === 'published' ? 'suspended' : 'published' });
-            }}
-            onDeleteProduct={(pId) => store.deleteProduct(pId)}
-          />
-        )}
+            {activeView === 'business-detail' && selectedBusiness && (
+              <BusinessProfileView
+                business={selectedBusiness}
+                products={store.products}
+                currentCurrency={store.currentCurrency}
+                onBack={() => setActiveView('marketplace')}
+                onOpenProduct={handleOpenProduct}
+                onContactSeller={(sellerId, sellerName) => handleContactSeller(sellerId, sellerName)}
+                onRequestQuoteProduct={handleRequestQuote}
+              />
+            )}
 
-        {activeView === 'messages' && store.currentUser && (
-          <MessagesView
-            currentUser={store.currentUser}
-            conversations={[
-              {
-                id: 'conv-ke-rw',
-                participants: ['user-buyer-ke', 'user-seller-rw'],
-                participantNames: {
-                  'user-buyer-ke': 'Amina Kimani (Kenya)',
-                  'user-seller-rw': 'Jean-Paul Ngarambe (Rwanda)'
-                },
-                lastMessage: 'Greetings Amina! Fantastic news...',
-                lastMessageAt: '2025-08-27T16:10:00Z',
-                unreadCount: 0,
-                relatedProductName: 'Bourbon Arabica Specialty Grade A'
-              }
-            ]}
-            messages={store.messages}
-            onSendMessage={(cId, receiverId, txt) => {
-              store.sendMessage(receiverId, 'Trade Counterpart', txt, cId);
-            }}
-          />
+            {activeView === 'ai-trade-assistant' && (
+              <AITradeAssistantView
+                countries={store.countries}
+                initialPrompt={assistantPrompt}
+                initialOrigin={tradeOrigin}
+                initialDestination={tradeDest}
+                initialProduct={tradeProduct}
+                onOpenCalculator={(orig, dest) => handleOpenCalculator(orig, dest)}
+                onOpenDocuments={(orig, dest, prod) => handleOpenDocuments(orig, dest, prod)}
+                onOpenMatching={() => setActiveView('matching')}
+              />
+            )}
+
+            {activeView === 'market-discovery' && (
+              <MarketDiscoveryView
+                countries={store.countries}
+                categories={store.categories}
+                onLaunchAssistantWithMarket={(prod, orig, dest) => handleLaunchAiTrade(
+                  `Analyze market entry strategy for exporting ${prod} from ${orig} to ${dest} under AfCFTA`,
+                  orig,
+                  dest,
+                  prod
+                )}
+              />
+            )}
+
+            {activeView === 'matching' && (
+              <MatchingView
+                businesses={store.businesses}
+                products={store.products}
+                countries={store.countries}
+                categories={store.categories}
+                onOpenBusiness={handleOpenBusiness}
+                onRequestQuoteBusiness={(biz) => {
+                  const firstBizProd = store.products.find(p => p.businessId === biz.businessId);
+                  if (firstBizProd) handleRequestQuote(firstBizProd);
+                }}
+                onContactBusiness={(sellerId, bizName) => handleContactSeller(sellerId, bizName)}
+              />
+            )}
+
+            {activeView === 'trade-calculator' && (
+              <TradeCalculatorView
+                countries={store.countries}
+                currentCurrency={store.currentCurrency}
+                initialOrigin={tradeOrigin}
+                initialDestination={tradeDest}
+                initialPrice={tradePrice}
+                initialQuantity={tradeQty}
+                onOpenDocuments={(orig, dest) => handleOpenDocuments(orig, dest)}
+              />
+            )}
+
+            {activeView === 'trade-documents' && (
+              <TradeDocumentsView
+                countries={store.countries}
+                categories={store.categories}
+                initialOrigin={tradeOrigin}
+                initialDestination={tradeDest}
+                initialProduct={tradeProduct}
+              />
+            )}
+
+            {/* Dashboard role protection checks */}
+            {activeView === 'buyer' && (
+              <BuyerDashboardView
+                currentUser={store.currentUser || authState.userProfile!}
+                orders={store.orders}
+                quotations={store.quotations}
+                products={store.products}
+                businesses={store.businesses}
+                currentCurrency={store.currentCurrency}
+                onOpenProduct={handleOpenProduct}
+                onOpenBusiness={handleOpenBusiness}
+                onAcceptQuotation={(qId) => store.acceptQuotation(qId)}
+                onOpenMessages={() => setActiveView('messages')}
+                onExploreMarketplace={() => setActiveView('marketplace')}
+              />
+            )}
+
+            {activeView === 'seller' && (
+              authState.role === 'buyer' ? (
+                <div className="max-w-md mx-auto my-12 p-6 bg-zinc-900 border border-zinc-800 rounded-2xl text-center space-y-4">
+                  <div className="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto">
+                    <AlertTriangle className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-base font-bold text-white">
+                    Seller Access Required
+                  </h3>
+                  <p className="text-xs text-zinc-400 leading-relaxed">
+                    Your account is registered as a Commercial Buyer. You cannot access the Seller Hub.
+                  </p>
+                  <div className="flex gap-2 justify-center pt-2">
+                    <button
+                      onClick={() => setActiveView('buyer')}
+                      className="px-4 py-2 bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-xs rounded-xl"
+                    >
+                      Go to Buyer Dashboard
+                    </button>
+                    <button
+                      onClick={() => setActiveView('profile')}
+                      className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold text-xs rounded-xl"
+                    >
+                      View Profile
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <SellerDashboardView
+                  currentUser={store.currentUser || authState.userProfile!}
+                  sellerBusiness={store.businesses.find(b => b.businessId === store.currentUser?.businessId)}
+                  products={store.products}
+                  orders={store.orders}
+                  quotations={store.quotations}
+                  categories={store.categories}
+                  countries={store.countries}
+                  currentCurrency={store.currentCurrency}
+                  onAddProduct={(prodData) => store.addProduct(prodData)}
+                  onUpdateProduct={(pId, updates) => store.updateProduct(pId, updates)}
+                  onDeleteProduct={(pId) => store.deleteProduct(pId)}
+                  onUpdateOrderStatus={(oId, stat, trk) => store.updateOrderStatus(oId, stat, trk)}
+                  onRespondQuotation={(qId, res) => store.respondToQuotation(qId, {
+                    offeredUnitPrice: res.unitPrice,
+                    shippingEstimate: res.shippingQuote,
+                    estimatedDeliveryTime: res.leadTimeDays,
+                    sellerNotes: res.notes
+                  })}
+                />
+              )
+            )}
+
+            {activeView === 'admin' && (
+              authState.role !== 'admin' ? (
+                <div className="max-w-md mx-auto my-12 p-6 bg-zinc-900 border border-zinc-800 rounded-2xl text-center space-y-4">
+                  <div className="w-12 h-12 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 flex items-center justify-center mx-auto">
+                    <ShieldAlert className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-base font-bold text-white">
+                    Administrator Privileges Required
+                  </h3>
+                  <p className="text-xs text-zinc-400 leading-relaxed">
+                    Access to the AfriTrade AI Operations Console is restricted to authenticated administrators.
+                  </p>
+                  <button
+                    onClick={() => setActiveView(authState.role === 'seller' ? 'seller' : 'buyer')}
+                    className="px-4 py-2 bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-xs rounded-xl"
+                  >
+                    Return to User Dashboard
+                  </button>
+                </div>
+              ) : (
+                <AdminDashboardView
+                  currentUser={store.currentUser || authState.userProfile!}
+                  businesses={store.businesses}
+                  products={store.products}
+                  orders={store.orders}
+                  currentCurrency={store.currentCurrency}
+                  onVerifyBusiness={(bId) => store.setBusinessVerification(bId, 'verified')}
+                  onSuspendBusiness={(bId) => store.setBusinessVerification(bId, 'suspended')}
+                  onToggleProductStatus={(pId) => {
+                    const p = store.products.find(x => x.id === pId);
+                    if (p) store.updateProduct(pId, { status: p.status === 'published' ? 'suspended' : 'published' });
+                  }}
+                  onDeleteProduct={(pId) => store.deleteProduct(pId)}
+                />
+              )
+            )}
+
+            {activeView === 'messages' && (
+              <MessagesView
+                currentUser={store.currentUser || authState.userProfile!}
+                conversations={[
+                  {
+                    id: 'conv-ke-rw',
+                    participants: ['user-buyer-ke', 'user-seller-rw'],
+                    participantNames: {
+                      'user-buyer-ke': 'Amina Kimani (Kenya)',
+                      'user-seller-rw': 'Jean-Paul Ngarambe (Rwanda)'
+                    },
+                    lastMessage: 'Greetings Amina! Fantastic news...',
+                    lastMessageAt: '2025-08-27T16:10:00Z',
+                    unreadCount: 0,
+                    relatedProductName: 'Bourbon Arabica Specialty Grade A'
+                  }
+                ]}
+                messages={store.messages}
+                onSendMessage={(cId, receiverId, txt) => {
+                  store.sendMessage(receiverId, 'Trade Counterpart', txt, cId);
+                }}
+              />
+            )}
+
+            {activeView === 'profile' && (
+              <ProfileView onNavigate={navigateTo} />
+            )}
+          </>
         )}
       </main>
 
@@ -388,17 +738,22 @@ export default function App() {
             <span className="text-zinc-700">•</span>
             <span className="text-emerald-400">AfCFTA Trade Matrix Compliant</span>
           </div>
-          <div className="flex items-center gap-4 text-zinc-500 text-[11px]">
-            <span>Latency: 28ms</span>
+          <div className="flex flex-wrap items-center gap-4 text-zinc-500 text-[11px]">
+            <button 
+              onClick={() => navigateTo('privacy-policy')}
+              className="hover:text-zinc-300 transition"
+            >
+              Privacy Policy
+            </button>
+            <span className="text-zinc-700">•</span>
+            <button 
+              onClick={() => navigateTo('terms-of-service')}
+              className="hover:text-zinc-300 transition"
+            >
+              Terms of Service
+            </button>
             <span className="text-zinc-700">|</span>
             <span>Escrow Engine: Active</span>
-            <span className="text-zinc-700">|</span>
-            <button 
-              onClick={store.resetToSeedData}
-              className="hover:text-zinc-300 underline underline-offset-2 transition"
-            >
-              Reset Seed Data
-            </button>
           </div>
         </div>
       </footer>
@@ -433,7 +788,12 @@ export default function App() {
         currentCurrency={store.currentCurrency}
         onSubmitQuotation={(data) => {
           if (!store.currentUser) {
-            setIsAuthOpen(true);
+            setAuthGateModal({
+              isOpen: true,
+              featureTitle: 'Request Quotation',
+              featureDescription: 'Sign in to submit your formal RFQ.',
+              targetView: 'marketplace'
+            });
             return;
           }
           store.createQuotationRequest({
@@ -457,29 +817,20 @@ export default function App() {
         }}
       />
 
-      <AuthModal
-        isOpen={isAuthOpen}
-        onClose={() => setIsAuthOpen(false)}
-        countries={store.countries}
-        onSignIn={(userData) => {
-          store.loginUser({
-            id: `user-${Date.now()}`,
-            fullName: userData.fullName,
-            email: userData.email,
-            phone: userData.phone,
-            country: userData.country,
-            city: userData.city,
-            role: userData.role,
-            businessName: userData.businessName,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            status: 'active'
-          });
-          setIsAuthOpen(false);
+      {/* Auth Gate Feature Modal */}
+      <AuthGateModal
+        isOpen={authGateModal.isOpen}
+        onClose={() => setAuthGateModal(prev => ({ ...prev, isOpen: false }))}
+        featureTitle={authGateModal.featureTitle}
+        featureDescription={authGateModal.featureDescription}
+        targetView={authGateModal.targetView}
+        onNavigateToLogin={(target) => {
+          setRedirectTarget(target || null);
+          setActiveView('login');
         }}
-        onSelectPresetRole={(role: UserRole) => {
-          store.switchUserRole(role);
-          setIsAuthOpen(false);
+        onNavigateToRegister={(target) => {
+          setRedirectTarget(target || null);
+          setActiveView('register');
         }}
       />
     </div>

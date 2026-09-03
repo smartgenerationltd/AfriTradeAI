@@ -2,7 +2,6 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Helper functions
     function isAuthenticated() {
       return request.auth != null;
     }
@@ -11,15 +10,25 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
     
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    
     function isAdmin() {
-      return isAuthenticated() && request.auth.token.role == 'admin';
+      return isAuthenticated() && (
+        request.auth.token.role == 'admin' ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         getUserData().role == 'admin')
+      );
     }
     
     // Users collection
     match /users/{userId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.auth.uid == userId;
-      allow update: if isOwner(userId) && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']));
+      // Requirement: Users must NEVER be able to register as administrators
+      allow create: if isOwner(userId) && request.resource.data.role in ['buyer', 'seller'];
+      // Users cannot self-elevate role
+      allow update: if (isOwner(userId) && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']))) || isAdmin();
       allow delete: if isAdmin();
     }
     
@@ -31,15 +40,15 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
     
-    // Products collection
+    // Products collection (Protected marketplace)
     match /products/{productId} {
-      allow read: if resource.data.status == 'published' || (isAuthenticated() && resource.data.sellerId == request.auth.uid) || isAdmin();
+      allow read: if isAuthenticated();
       allow create: if isAuthenticated();
       allow update: if isAuthenticated() && (resource.data.sellerId == request.auth.uid || isAdmin());
       allow delete: if isAuthenticated() && (resource.data.sellerId == request.auth.uid || isAdmin());
     }
     
-    // Categories and Countries (Read public, Write admin only)
+    // Categories and Countries
     match /categories/{categoryId} {
       allow read: if true;
       allow write: if isAdmin();

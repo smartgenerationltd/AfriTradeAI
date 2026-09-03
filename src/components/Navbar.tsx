@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { 
   Globe, ShoppingCart, Bell, User, Search, ShieldCheck, 
   Menu, X, Sparkles, Compass, Calculator, FileText, 
-  Store, Package, LogOut, CheckCircle2, ChevronDown
+  Store, Package, LogOut, CheckCircle2, ChevronDown, 
+  Info, HelpCircle, ShieldAlert
 } from 'lucide-react';
 import { UserProfile, UserRole } from '../types';
 import { SUPPORTED_CURRENCIES } from '../services/currency';
@@ -18,9 +19,9 @@ interface NavbarProps {
   onSelectView: (view: string) => void;
   onSelectCurrency: (curr: string) => void;
   onSelectLanguage: (lang: LanguageCode) => void;
-  onSwitchRole: (role: UserRole) => void;
   onOpenCart: () => void;
-  onOpenAuth: () => void;
+  onOpenLogin: () => void;
+  onOpenRegister: () => void;
   onLogout: () => void;
 }
 
@@ -34,9 +35,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSelectView,
   onSelectCurrency,
   onSelectLanguage,
-  onSwitchRole,
   onOpenCart,
-  onOpenAuth,
+  onOpenLogin,
+  onOpenRegister,
   onLogout,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -57,45 +58,26 @@ export const Navbar: React.FC<NavbarProps> = ({
             </span>
             <span className="hidden sm:inline text-zinc-700">|</span>
             <span className="hidden sm:inline text-zinc-400">
-              Pan-African Trade Matrix • 35+ Nations Interconnected
+              Pan-African Trade Matrix • 54 Nations Interconnected
             </span>
           </div>
 
-          {/* Quick Demo Switcher */}
-          <div className="flex items-center gap-2">
-            <span className="text-zinc-500 font-medium text-[11px]">Role Switch:</span>
-            <div className="inline-flex rounded-md p-0.5 bg-zinc-900 border border-zinc-800">
-              <button
-                onClick={() => onSwitchRole('buyer')}
-                className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
-                  currentUser?.role === 'buyer' 
-                    ? 'bg-zinc-800 text-emerald-400 shadow-xs border border-zinc-700/60' 
-                    : 'text-zinc-400 hover:text-zinc-200'
-                }`}
-              >
-                Buyer (KE)
-              </button>
-              <button
-                onClick={() => onSwitchRole('seller')}
-                className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
-                  currentUser?.role === 'seller' 
-                    ? 'bg-zinc-800 text-emerald-400 shadow-xs border border-zinc-700/60' 
-                    : 'text-zinc-400 hover:text-zinc-200'
-                }`}
-              >
-                Seller (RW)
-              </button>
-              <button
-                onClick={() => onSwitchRole('admin')}
-                className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
-                  currentUser?.role === 'admin' 
-                    ? 'bg-zinc-800 text-amber-400 shadow-xs border border-zinc-700/60' 
-                    : 'text-zinc-400 hover:text-zinc-200'
-                }`}
-              >
-                Admin
-              </button>
-            </div>
+          <div className="flex items-center gap-4 text-[11px]">
+            <button
+              onClick={() => onSelectView('about')}
+              className={`hover:text-zinc-200 transition flex items-center gap-1 ${activeView === 'about' ? 'text-emerald-400 font-semibold' : 'text-zinc-400'}`}
+            >
+              <Info className="w-3 h-3" />
+              <span>About</span>
+            </button>
+            <span className="text-zinc-700">|</span>
+            <button
+              onClick={() => onSelectView('how-it-works')}
+              className={`hover:text-zinc-200 transition flex items-center gap-1 ${activeView === 'how-it-works' ? 'text-emerald-400 font-semibold' : 'text-zinc-400'}`}
+            >
+              <HelpCircle className="w-3 h-3" />
+              <span>How It Works</span>
+            </button>
           </div>
         </div>
       </div>
@@ -191,8 +173,8 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
           </nav>
 
-          {/* Right Action Icons: Currency, Language, Cart, Profile */}
-          <div className="flex items-center gap-1.5">
+          {/* Right Action Icons: Currency, Language, Cart, Auth */}
+          <div className="flex items-center gap-2">
             {/* Currency Selector */}
             <div className="relative">
               <button
@@ -278,132 +260,160 @@ export const Navbar: React.FC<NavbarProps> = ({
               )}
             </button>
 
-            {/* Notification Bell */}
-            <button
-              onClick={() => {
-                if (currentUser?.role === 'seller') onSelectView('seller');
-                else if (currentUser?.role === 'admin') onSelectView('admin');
-                else onSelectView('buyer');
-              }}
-              className="relative p-1.5 rounded-md border border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition"
-              title="Notifications"
-            >
-              <Bell className="w-4 h-4" />
-              {unreadNotifsCount > 0 && (
-                <span className="absolute 1 top-1 right-1 w-2 h-2 rounded-full bg-amber-400" />
-              )}
-            </button>
-
-            {/* User Account / Dashboard Menu */}
+            {/* Section 15: Logged-in vs Logged-out Navbar UI */}
             {currentUser ? (
-              <div className="relative">
+              <div className="flex items-center gap-1.5">
+                {/* Messages Quick Link */}
                 <button
-                  onClick={() => setUserDropdownOpen(!userDropdownOpen)}
-                  className="flex items-center gap-1.5 pl-1.5 pr-1 py-1 rounded-md border border-zinc-800 bg-zinc-900 hover:bg-zinc-850 hover:border-zinc-700 transition"
+                  onClick={() => onSelectView('messages')}
+                  className={`p-1.5 rounded-md border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 transition ${
+                    activeView === 'messages' ? 'border-zinc-700 text-zinc-100' : ''
+                  }`}
+                  title="Trade Messages"
                 >
-                  <img
-                    src={currentUser.photoURL || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=100&h=100&q=80'}
-                    alt={currentUser.fullName}
-                    className="w-5 h-5 rounded-full object-cover border border-zinc-700"
-                  />
-                  <span className="hidden md:inline text-xs font-medium text-zinc-200">
-                    {currentUser.fullName.split(' ')[0]}
-                  </span>
-                  <span className={`text-[9px] px-1 py-0.2 rounded font-mono font-semibold uppercase ${
-                    currentUser.role === 'admin' 
-                      ? 'bg-amber-950/80 text-amber-300 border border-amber-800/60'
-                      : currentUser.role === 'seller'
-                      ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800/60'
-                      : 'bg-zinc-800 text-zinc-300 border border-zinc-700'
-                  }`}>
-                    {currentUser.role}
-                  </span>
-                  <ChevronDown className="w-3 h-3 text-zinc-500" />
+                  <Bell className="w-4 h-4" />
+                  {unreadNotifsCount > 0 && (
+                    <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-400" />
+                  )}
                 </button>
 
-                {userDropdownOpen && (
-                  <div className="absolute right-0 mt-1.5 w-56 bg-zinc-900 rounded-lg shadow-2xl border border-zinc-800 py-1.5 z-50 text-xs">
-                    <div className="px-3 py-2 border-b border-zinc-800">
-                      <p className="font-semibold text-zinc-100 truncate">{currentUser.fullName}</p>
-                      <p className="text-[11px] text-zinc-400 font-mono truncate">{currentUser.email}</p>
-                      <p className="text-[10px] text-emerald-400 font-medium mt-0.5">
-                        📍 {currentUser.city}, {currentUser.country}
-                      </p>
+                {/* User Account / Dashboard Dropdown */}
+                <div className="relative">
+                  <button
+                    onClick={() => setUserDropdownOpen(!userDropdownOpen)}
+                    className="flex items-center gap-1.5 pl-1.5 pr-1 py-1 rounded-md border border-zinc-800 bg-zinc-900 hover:bg-zinc-850 hover:border-zinc-700 transition"
+                  >
+                    <div className="w-5 h-5 rounded-full overflow-hidden bg-zinc-800 border border-zinc-700 flex items-center justify-center text-[10px] font-bold text-zinc-300">
+                      {currentUser.photoURL ? (
+                        <img
+                          src={currentUser.photoURL}
+                          alt={currentUser.fullName}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        currentUser.fullName.charAt(0).toUpperCase()
+                      )}
                     </div>
+                    <span className="hidden md:inline text-xs font-medium text-zinc-200 max-w-[90px] truncate">
+                      {currentUser.fullName.split(' ')[0]}
+                    </span>
+                    <span className={`text-[9px] px-1 py-0.2 rounded font-mono font-semibold uppercase ${
+                      currentUser.role === 'admin' 
+                        ? 'bg-amber-950/80 text-amber-300 border border-amber-800/60'
+                        : currentUser.role === 'seller'
+                        ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800/60'
+                        : 'bg-zinc-800 text-zinc-300 border border-zinc-700'
+                    }`}>
+                      {currentUser.role}
+                    </span>
+                    <ChevronDown className="w-3 h-3 text-zinc-500" />
+                  </button>
 
-                    <div className="py-1">
-                      {currentUser.role === 'buyer' && (
+                  {userDropdownOpen && (
+                    <div className="absolute right-0 mt-1.5 w-60 bg-zinc-900 rounded-xl shadow-2xl border border-zinc-800 py-1.5 z-50 text-xs">
+                      <div className="px-3 py-2 border-b border-zinc-800">
+                        <p className="font-semibold text-zinc-100 truncate">{currentUser.fullName}</p>
+                        <p className="text-[11px] text-zinc-400 font-mono truncate">{currentUser.email}</p>
+                        <p className="text-[10px] text-emerald-400 font-medium mt-0.5">
+                          📍 {currentUser.city || 'Headquarters'}, {currentUser.country}
+                        </p>
+                      </div>
+
+                      <div className="py-1">
+                        {/* Role-specific Dashboard */}
+                        {currentUser.role === 'buyer' && (
+                          <button
+                            onClick={() => {
+                              onSelectView('buyer');
+                              setUserDropdownOpen(false);
+                            }}
+                            className="w-full px-3 py-1.5 text-left text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 flex items-center gap-2"
+                          >
+                            <Package className="w-3.5 h-3.5 text-zinc-400" />
+                            Buyer Dashboard
+                          </button>
+                        )}
+
+                        {currentUser.role === 'seller' && (
+                          <button
+                            onClick={() => {
+                              onSelectView('seller');
+                              setUserDropdownOpen(false);
+                            }}
+                            className="w-full px-3 py-1.5 text-left text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 flex items-center gap-2"
+                          >
+                            <Store className="w-3.5 h-3.5 text-zinc-400" />
+                            Seller Dashboard
+                          </button>
+                        )}
+
+                        {currentUser.role === 'admin' && (
+                          <button
+                            onClick={() => {
+                              onSelectView('admin');
+                              setUserDropdownOpen(false);
+                            }}
+                            className="w-full px-3 py-1.5 text-left text-zinc-300 hover:bg-zinc-800 hover:text-amber-300 flex items-center gap-2"
+                          >
+                            <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                            Admin Dashboard
+                          </button>
+                        )}
+
                         <button
                           onClick={() => {
-                            onSelectView('buyer');
+                            onSelectView('messages');
                             setUserDropdownOpen(false);
                           }}
                           className="w-full px-3 py-1.5 text-left text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 flex items-center gap-2"
                         >
-                          <Package className="w-3.5 h-3.5 text-zinc-400" />
-                          Buyer Orders & Dashboard
+                          <Bell className="w-3.5 h-3.5 text-zinc-400" />
+                          Messages
                         </button>
-                      )}
 
-                      {currentUser.role === 'seller' && (
                         <button
                           onClick={() => {
-                            onSelectView('seller');
+                            onSelectView('profile');
                             setUserDropdownOpen(false);
                           }}
                           className="w-full px-3 py-1.5 text-left text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 flex items-center gap-2"
                         >
-                          <Store className="w-3.5 h-3.5 text-zinc-400" />
-                          Seller Hub & Inventory
+                          <User className="w-3.5 h-3.5 text-zinc-400" />
+                          Profile
                         </button>
-                      )}
+                      </div>
 
-                      {currentUser.role === 'admin' && (
+                      <div className="border-t border-zinc-800 pt-1">
                         <button
                           onClick={() => {
-                            onSelectView('admin');
+                            onLogout();
                             setUserDropdownOpen(false);
                           }}
-                          className="w-full px-3 py-1.5 text-left text-zinc-300 hover:bg-zinc-800 hover:text-amber-300 flex items-center gap-2"
+                          className="w-full px-3 py-1.5 text-left text-red-400 hover:bg-red-950/40 flex items-center gap-2"
                         >
-                          <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-                          Admin Console
+                          <LogOut className="w-3.5 h-3.5" />
+                          Sign Out
                         </button>
-                      )}
-
-                      <button
-                        onClick={() => {
-                          onSelectView('messages');
-                          setUserDropdownOpen(false);
-                        }}
-                        className="w-full px-3 py-1.5 text-left text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 flex items-center gap-2"
-                      >
-                        Trade Messages
-                      </button>
+                      </div>
                     </div>
-
-                    <div className="border-t border-zinc-800 pt-1">
-                      <button
-                        onClick={() => {
-                          onLogout();
-                          setUserDropdownOpen(false);
-                        }}
-                        className="w-full px-3 py-1.5 text-left text-red-400 hover:bg-red-950/40 flex items-center gap-2"
-                      >
-                        <LogOut className="w-3.5 h-3.5" />
-                        Sign Out
-                      </button>
-                    </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             ) : (
-              <button
-                onClick={onOpenAuth}
-                className="px-2.5 py-1 rounded-md bg-zinc-100 hover:bg-white text-zinc-950 text-xs font-semibold transition"
-              >
-                Sign In
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={onOpenLogin}
+                  className="px-2.5 py-1 rounded-lg border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 text-xs font-semibold transition"
+                >
+                  Sign In
+                </button>
+                <button
+                  onClick={onOpenRegister}
+                  className="px-2.5 py-1 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 text-xs font-semibold transition"
+                >
+                  Create Account
+                </button>
+              </div>
             )}
 
             {/* Mobile menu hamburger */}
@@ -471,29 +481,37 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
           </div>
 
-          <div className="pt-1 flex items-center justify-between text-xs">
-            <span className="font-mono text-zinc-500">Dashboards:</span>
-            <div className="flex gap-1.5">
-              <button 
-                onClick={() => { onSelectView('buyer'); setMobileMenuOpen(false); }}
-                className="px-2 py-0.5 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded font-mono text-[11px]"
+          <div className="flex items-center justify-between text-xs py-1">
+            <button
+              onClick={() => { onSelectView('about'); setMobileMenuOpen(false); }}
+              className="text-zinc-400 hover:text-zinc-200"
+            >
+              About AfriTrade
+            </button>
+            <button
+              onClick={() => { onSelectView('how-it-works'); setMobileMenuOpen(false); }}
+              className="text-zinc-400 hover:text-zinc-200"
+            >
+              How It Works
+            </button>
+          </div>
+
+          {!currentUser && (
+            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-zinc-800">
+              <button
+                onClick={() => { onOpenLogin(); setMobileMenuOpen(false); }}
+                className="py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-200 font-semibold text-center text-xs"
               >
-                Buyer
+                Sign In
               </button>
-              <button 
-                onClick={() => { onSelectView('seller'); setMobileMenuOpen(false); }}
-                className="px-2 py-0.5 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded font-mono text-[11px]"
+              <button
+                onClick={() => { onOpenRegister(); setMobileMenuOpen(false); }}
+                className="py-2 rounded-lg bg-zinc-100 text-zinc-950 font-semibold text-center text-xs"
               >
-                Seller
-              </button>
-              <button 
-                onClick={() => { onSelectView('admin'); setMobileMenuOpen(false); }}
-                className="px-2 py-0.5 bg-zinc-900 border border-zinc-800 text-amber-400 rounded font-mono text-[11px]"
-              >
-                Admin
+                Create Account
               </button>
             </div>
-          </div>
+          )}
         </div>
       )}
     </header>
