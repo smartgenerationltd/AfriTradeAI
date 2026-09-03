@@ -1,0 +1,68 @@
+{
+  "entities": {
+    "users": {
+      "description": "User profiles for buyers, sellers, and administrators",
+      "fields": {
+        "id": { "type": "string", "description": "Unique user identifier" },
+        "fullName": { "type": "string", "description": "User's full legal or trade name" },
+        "email": { "type": "string", "description": "Verified email address" },
+        "phone": { "type": "string", "description": "Contact telephone number" },
+        "country": { "type": "string", "description": "African or international domicile country" },
+        "city": { "type": "string", "description": "Operating city" },
+        "role": { "type": "string", "description": "buyer, seller, or admin" },
+        "status": { "type": "string", "description": "active or suspended" }
+      }
+    },
+    "businesses": {
+      "description": "Registered African MSME enterprise profiles",
+      "fields": {
+        "businessId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "businessName": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "country": { "type": "string" },
+        "city": { "type": "string" },
+        "verificationStatus": { "type": "string", "description": "unverified, pending, verified, suspended" },
+        "exportReady": { "type": "boolean" }
+      }
+    },
+    "products": {
+      "description": "Marketplace commodities and manufactured goods catalogue",
+      "fields": {
+        "id": { "type": "string" },
+        "sellerId": { "type": "string" },
+        "businessId": { "type": "string" },
+        "name": { "type": "string" },
+        "price": { "type": "number" },
+        "currency": { "type": "string" },
+        "quantity": { "type": "number" },
+        "minimumOrderQuantity": { "type": "number" },
+        "unit": { "type": "string" },
+        "status": { "type": "string", "description": "draft, published, out_of_stock, suspended" }
+      }
+    },
+    "orders": {
+      "description": "Commercial orders and AfCFTA cross-border transactions",
+      "fields": {
+        "orderId": { "type": "string" },
+        "buyerId": { "type": "string" },
+        "sellerId": { "type": "string" },
+        "total": { "type": "number" },
+        "currency": { "type": "string" },
+        "status": { "type": "string", "description": "pending, confirmed, processing, shipped, delivered, cancelled" }
+      }
+    },
+    "quotations": {
+      "description": "Custom B2B quotations and trade tenders",
+      "fields": {
+        "quotationId": { "type": "string" },
+        "productId": { "type": "string" },
+        "buyerId": { "type": "string" },
+        "sellerId": { "type": "string" },
+        "requestedQuantity": { "type": "number" },
+        "status": { "type": "string", "description": "pending, responded, accepted, declined" }
+      }
+    }
+  }
+}
