@@ -15,7 +15,9 @@ export interface UserProfile {
   emailVerified?: boolean;
   phoneVerified?: boolean;
   profileCompleted: boolean;
+  authProvider?: string;
   createdAt: string;
+  lastLoginAt?: string;
   updatedAt: string;
   status: 'active' | 'suspended';
 }

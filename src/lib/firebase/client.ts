@@ -84,26 +84,33 @@ if (isOAuthTokenProvidedAsApiKey) {
   );
 }
 
-export const firebaseConfig = {
-  apiKey: rawApiKey,
-  authDomain: rawAuthDomain,
-  projectId: rawProjectId,
-  storageBucket: rawStorageBucket,
-  messagingSenderId: rawMessagingSenderId,
-  appId: rawAppId,
-};
+const hasValidApiKey = isValidFirebaseApiKey(rawApiKey);
 
-export const isFirebaseConfigured = Boolean(
-  isValidFirebaseApiKey(firebaseConfig.apiKey) && 
-  isValidFirebaseProjectId(firebaseConfig.projectId)
-);
+export const firebaseConfig = {
+  apiKey: hasValidApiKey ? rawApiKey.trim() : '',
+  authDomain: (rawAuthDomain && !rawAuthDomain.startsWith('AQ.') && !rawAuthDomain.startsWith('ya29.'))
+    ? rawAuthDomain.trim()
+    : 'afritradeai.firebaseapp.com',
+  projectId: (rawProjectId && !rawProjectId.startsWith('AQ.') && !rawProjectId.startsWith('ya29.'))
+    ? rawProjectId.trim()
+    : 'afritradeai',
+  storageBucket: (rawStorageBucket && !rawStorageBucket.startsWith('AQ.') && !rawStorageBucket.startsWith('ya29.'))
+    ? rawStorageBucket.trim()
+    : 'afritradeai.appspot.com',
+  messagingSenderId: (rawMessagingSenderId && !rawMessagingSenderId.startsWith('AQ.') && !rawMessagingSenderId.startsWith('ya29.'))
+    ? rawMessagingSenderId.trim()
+    : undefined,
+  appId: (rawAppId && !rawAppId.startsWith('AQ.') && !rawAppId.startsWith('ya29.'))
+    ? rawAppId.trim()
+    : undefined,
+};
 
 let app: FirebaseApp | null = null;
 let auth: Auth | null = null;
 let db: Firestore | null = null;
 let googleProvider: GoogleAuthProvider | null = null;
 
-if (isFirebaseConfigured) {
+if (hasValidApiKey) {
   try {
     app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
     auth = getAuth(app);
@@ -114,17 +121,18 @@ if (isFirebaseConfigured) {
     googleProvider.setCustomParameters({ 
       prompt: 'select_account' 
     });
-    // Add standard email and profile scopes
     googleProvider.addScope('email');
     googleProvider.addScope('profile');
 
-    console.info('[AfriTrade] Firebase client initialized with project:', firebaseConfig.projectId);
+    console.info('[AfriTrade] Live Firebase client successfully initialized for project:', firebaseConfig.projectId);
   } catch (err) {
-    console.error('[AfriTrade] Error initializing Firebase client:', err);
+    console.warn('[AfriTrade] Error initializing Firebase client:', err);
   }
 } else {
-  console.info('[AfriTrade] Operating in secure local mode with comprehensive demo personas and persistence.');
+  console.info('[AfriTrade] Initialized in resilient local storage mode. To activate live Firebase Cloud Firestore and Auth, set VITE_FIREBASE_API_KEY with a valid Google Web API Key (AIzaSy...).');
 }
+
+export const isFirebaseConfigured = Boolean(app && auth && db && hasValidApiKey);
 
 export { app, auth, db, googleProvider };
 export default app;

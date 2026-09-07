@@ -89,8 +89,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Sync user state from Firebase Auth
   useEffect(() => {
-    if (!auth) {
-      // In local mode without active Firebase client
+    if (!auth || !isFirebaseConfigured) {
+      // In preview mode or when Firebase client is not fully configured
       setLoading(false);
       return;
     }
@@ -99,13 +99,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(fbUser);
       if (fbUser) {
         try {
-          // Attempt to load Firestore user document
+          // Load Firestore user document
           let profile = await getUserProfileFromFirestore(fbUser.uid);
           
           const isAdminUser = fbUser.email && ADMIN_EMAILS.includes(fbUser.email.toLowerCase());
 
           if (!profile) {
-            // Profile doesn't exist yet (e.g. initial Google sign-in)
+            // Profile doesn't exist yet: initialize with profileCompleted: false
             profile = {
               id: fbUser.uid,
               uid: fbUser.uid,
@@ -114,32 +114,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               phone: fbUser.phoneNumber || '',
               country: '',
               city: '',
-              role: isAdminUser ? 'admin' : 'buyer', // Default to buyer unless verified admin email
+              role: isAdminUser ? 'admin' : 'buyer',
               photoURL: fbUser.photoURL || undefined,
               emailVerified: fbUser.emailVerified,
               phoneVerified: false,
               profileCompleted: isAdminUser ? true : false,
+              authProvider: fbUser.providerData?.[0]?.providerId || 'password',
               status: 'active',
               createdAt: new Date().toISOString(),
+              lastLoginAt: new Date().toISOString(),
               updatedAt: new Date().toISOString()
             };
             await saveUserProfileToFirestore(profile);
-          } else if (isAdminUser && profile.role !== 'admin') {
-            profile.role = 'admin';
-            profile.profileCompleted = true;
-            await saveUserProfileToFirestore(profile);
-          }
-
-          // Sync emailVerified status
-          if (profile.emailVerified !== fbUser.emailVerified) {
-            profile.emailVerified = fbUser.emailVerified;
+          } else {
+            // Existing profile: PRESERVE existing trader profile, update lastLoginAt and emailVerified
+            const updates: Partial<UserProfile> = {
+              lastLoginAt: new Date().toISOString(),
+            };
+            if (isAdminUser && profile.role !== 'admin') {
+              updates.role = 'admin';
+              updates.profileCompleted = true;
+            }
+            if (fbUser.emailVerified && !profile.emailVerified) {
+              updates.emailVerified = true;
+            }
+            profile = {
+              ...profile,
+              ...updates,
+              updatedAt: new Date().toISOString()
+            };
             await saveUserProfileToFirestore(profile);
           }
 
           setUserProfile(profile);
           localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(profile));
         } catch (err) {
-          console.warn('[AfriTrade] Firestore profile sync error, using fallback:', err);
+          console.warn('[AfriTrade] Firestore profile sync warning:', err);
         }
       } else {
         setUserProfile(null);
@@ -151,77 +161,91 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => unsubscribe();
   }, []);
 
-  // Format friendly error messages with diagnostics
+  // Format friendly error messages matching requirements
   const parseAuthError = (err: unknown): string => {
     if (!err || typeof err !== 'object') return 'An unexpected authentication error occurred.';
     const anyErr = err as { code?: string; message?: string };
     const code = anyErr.code || '';
     const rawMsg = anyErr.message || '';
 
-    // Log full technical trace to developer console for diagnosis
-    console.error('[AfriTrade Auth] Firebase error encountered:', {
+    // Log diagnostic warning for debugging
+    console.warn('[AfriTrade Auth] Authentication event notice:', {
       code,
       message: rawMsg,
       hostname: typeof window !== 'undefined' ? window.location.hostname : 'unknown'
     });
 
-    // Check specifically for API Key vs OAuth token conflict
+    // 1. Popup blocked
+    if (code === 'auth/popup-blocked' || rawMsg.includes('popup-blocked')) {
+      return 'Sign-in popup was blocked by your browser. Please allow popups for this site and try again.';
+    }
+
+    // 2. Google sign-in cancelled
+    if (code === 'auth/popup-closed-by-user' || rawMsg.includes('popup-closed-by-user')) {
+      return 'Google sign-in was cancelled before completion.';
+    }
+
+    // 3. Unauthorized domain
+    if (code === 'auth/unauthorized-domain' || rawMsg.includes('unauthorized-domain')) {
+      return 'This domain is not authorized for Firebase authentication. Please verify authorized domains in Firebase Console.';
+    }
+
+    // 4. Invalid email
+    if (code === 'auth/invalid-email' || rawMsg.includes('invalid-email')) {
+      return 'Please enter a valid email address.';
+    }
+
+    // 5. Wrong password / invalid credentials
     if (
-      code === 'auth/api-keys-are-not-supported-by-this-api' ||
-      rawMsg.includes('api-keys-are-not-supported-by-this-api') ||
+      code === 'auth/wrong-password' ||
+      code === 'auth/invalid-credential' ||
+      code === 'auth/user-not-found' ||
+      rawMsg.includes('wrong-password') ||
+      rawMsg.includes('invalid-credential')
+    ) {
+      return 'Incorrect email or password. Please verify your credentials and try again.';
+    }
+
+    // 6. Email already in use
+    if (code === 'auth/email-already-in-use' || rawMsg.includes('email-already-in-use')) {
+      return 'An account with this email already exists. Please sign in instead.';
+    }
+
+    // 7. Network error
+    if (code === 'auth/network-request-failed' || rawMsg.includes('network-request-failed') || rawMsg.includes('network error')) {
+      return 'Network communication error. Please check your internet connection and try again.';
+    }
+
+    // 8. Firebase configuration / API key error
+    if (
+      code.includes('api-keys-are-not-supported') ||
+      code.includes('invalid-api-key') ||
+      code.includes('operation-not-allowed') ||
+      rawMsg.includes('api-keys-are-not-supported') ||
       rawMsg.includes('assert-a-principal')
     ) {
-      console.error(
-        '[AfriTrade Auth Diagnostic] ROOT CAUSE IDENTIFIED:\n' +
-        'Google Identity Toolkit rejected the request because an OAuth2 access token was provided in place of a Firebase Web API Key.\n' +
-        '• Firebase Web API Keys begin with "AIzaSy..." and identify your web client.\n' +
-        '• OAuth access tokens ("AQ..." or "ya29...") represent user or service principals and cannot be passed to Identity Toolkit in the apiKey parameter.\n' +
-        'To resolve: Update NEXT_PUBLIC_FIREBASE_API_KEY / VITE_FIREBASE_API_KEY with the Web API Key from Firebase Console > Project Settings.'
-      );
-      return 'Google Sign-In is temporarily unavailable. Please try again or sign in with email.';
+      return 'Firebase Web API key is required. A Google Cloud OAuth token was provided instead of a Web API key (AIza...). Please update VITE_FIREBASE_API_KEY in your settings.';
     }
 
-    if (code === 'auth/operation-not-allowed' || rawMsg.includes('operation-not-allowed')) {
-      console.warn(
-        '[AfriTrade Auth] Google Provider is not enabled in Firebase Console.\n' +
-        'Navigate to Firebase Console -> Authentication -> Sign-in method -> Google, and enable it.'
-      );
-      return 'Google Sign-In is currently disabled in Firebase Console. Please sign in with email or enable Google in project settings.';
+    // 9. Firestore permission/write error
+    if (
+      code === 'permission-denied' ||
+      rawMsg.includes('Database permission error') ||
+      rawMsg.includes('Firestore write error') ||
+      rawMsg.includes('insufficient permissions')
+    ) {
+      return 'Database permission or write error. Unable to save trader profile to Cloud Firestore.';
     }
 
-    if (code === 'auth/unauthorized-domain' || rawMsg.includes('unauthorized-domain')) {
-      const host = typeof window !== 'undefined' ? window.location.hostname : 'current domain';
-      console.warn(`[AfriTrade Auth] Domain "${host}" is not authorized for Firebase Authentication.`);
-      return `Domain (${host}) is not authorized in Firebase Console. Please add this domain under Firebase Authentication > Settings > Authorized Domains.`;
+    if (code === 'auth/weak-password') {
+      return 'Password should be at least 6 characters.';
     }
 
-    switch (code) {
-      case 'auth/invalid-email':
-        return 'Please enter a valid email address.';
-      case 'auth/user-not-found':
-      case 'auth/wrong-password':
-      case 'auth/invalid-credential':
-        return 'Unable to sign in. Please check your email and password and try again.';
-      case 'auth/email-already-in-use':
-        return 'An account with this email already exists. Please sign in instead.';
-      case 'auth/weak-password':
-        return 'Password should be at least 6 characters with a combination of letters and numbers.';
-      case 'auth/popup-closed-by-user':
-        return 'Sign-in window was closed before completion. Please try again.';
-      case 'auth/popup-blocked':
-        return 'Sign-in popup was blocked by your browser. Please enable popups for this domain and try again.';
-      case 'auth/cancelled-popup-request':
-        return 'Only one sign-in window can be open at a time.';
-      case 'auth/too-many-requests':
-        return 'Too many failed login attempts. Please reset your password or try again in a few minutes.';
-      case 'auth/network-request-failed':
-        return 'Network connection issue. Please check your internet connectivity and try again.';
-      default:
-        if (rawMsg.startsWith('Firebase:') || rawMsg.includes('auth/')) {
-          return 'Google Sign-In is temporarily unavailable. Please try again or sign in with email.';
-        }
-        return rawMsg || 'Authentication failed. Please verify your credentials.';
+    if (code === 'auth/too-many-requests') {
+      return 'Too many attempts. Please try again in a few minutes.';
     }
+
+    return rawMsg || 'Authentication failed. Please verify your credentials and try again.';
   };
 
   // 1. Email Sign In
@@ -229,82 +253,103 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     setLoading(true);
 
-    try {
-      if (auth) {
-        let credential;
+    // Resilient fallback when Firebase live client is not configured
+    if (!auth || !isFirebaseConfigured) {
+      const emailCandidate = email.trim().toLowerCase();
+      const isAdminUser = ADMIN_EMAILS.includes(emailCandidate);
+      const savedProfile = (() => {
         try {
-          credential = await signInWithEmailAndPassword(auth, email.trim(), password);
-        } catch (authErr: unknown) {
-          const anyErr = authErr as { code?: string; message?: string };
-          const code = anyErr?.code || '';
-          const msg = anyErr?.message || '';
-          if (
-            code === 'auth/api-keys-are-not-supported-by-this-api' ||
-            code === 'auth/invalid-api-key' ||
-            msg.includes('api-keys-are-not-supported-by-this-api') ||
-            msg.includes('assert-a-principal')
-          ) {
-            console.warn('[AfriTrade Auth] API key conflict encountered; falling back to local trader sign-in.');
-            credential = null;
-          } else {
-            throw authErr;
-          }
+          const raw = localStorage.getItem(LOCAL_STORAGE_USER_KEY);
+          return raw ? JSON.parse(raw) : null;
+        } catch {
+          return null;
         }
+      })();
 
-        if (credential) {
-          const fbUser = credential.user;
-          let profile = await getUserProfileFromFirestore(fbUser.uid);
-
-          if (!profile) {
-            const isAdminUser = fbUser.email && ADMIN_EMAILS.includes(fbUser.email.toLowerCase());
-            profile = {
-              id: fbUser.uid,
-              uid: fbUser.uid,
-              fullName: fbUser.displayName || '',
-              email: fbUser.email || email,
-              phone: '',
-              country: '',
-              city: '',
-              role: isAdminUser ? 'admin' : 'buyer',
-              emailVerified: fbUser.emailVerified,
-              phoneVerified: false,
-              profileCompleted: isAdminUser ? true : false,
-              status: 'active',
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString()
-            };
-            await saveUserProfileToFirestore(profile);
+      const uid = savedProfile?.id || savedProfile?.uid || `usr-${Date.now()}`;
+      const profile: UserProfile = (savedProfile && savedProfile.email?.toLowerCase() === emailCandidate)
+        ? {
+            ...savedProfile,
+            lastLoginAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
           }
+        : {
+            id: uid,
+            uid: uid,
+            fullName: emailCandidate.split('@')[0] || 'Trader',
+            email: emailCandidate,
+            phone: '',
+            country: 'Rwanda',
+            city: 'Kigali',
+            role: isAdminUser ? 'admin' : 'buyer',
+            emailVerified: true,
+            phoneVerified: false,
+            profileCompleted: isAdminUser ? true : false,
+            authProvider: 'password',
+            status: 'active',
+            createdAt: new Date().toISOString(),
+            lastLoginAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
 
-          setUserProfile(profile);
-          localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(profile));
-          setLoading(false);
-          return profile;
+      setUserProfile(profile);
+      localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(profile));
+      setLoading(false);
+      return profile;
+    }
+
+    try {
+      const credential = await signInWithEmailAndPassword(auth, email.trim(), password);
+      const fbUser = credential.user;
+
+      let profile = await getUserProfileFromFirestore(fbUser.uid);
+      const isAdminUser = fbUser.email && ADMIN_EMAILS.includes(fbUser.email.toLowerCase());
+
+      if (!profile) {
+        profile = {
+          id: fbUser.uid,
+          uid: fbUser.uid,
+          fullName: fbUser.displayName || email.split('@')[0],
+          email: fbUser.email || email.trim(),
+          phone: '',
+          country: '',
+          city: '',
+          role: isAdminUser ? 'admin' : 'buyer',
+          emailVerified: fbUser.emailVerified,
+          phoneVerified: false,
+          profileCompleted: isAdminUser ? true : false,
+          authProvider: 'password',
+          status: 'active',
+          createdAt: new Date().toISOString(),
+          lastLoginAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        await saveUserProfileToFirestore(profile);
+      } else {
+        // PRESERVE existing profile info, update lastLoginAt and emailVerified
+        const updates: Partial<UserProfile> = {
+          lastLoginAt: new Date().toISOString(),
+        };
+        if (isAdminUser && profile.role !== 'admin') {
+          updates.role = 'admin';
+          updates.profileCompleted = true;
         }
+        if (fbUser.emailVerified && !profile.emailVerified) {
+          updates.emailVerified = true;
+        }
+        profile = {
+          ...profile,
+          ...updates,
+          updatedAt: new Date().toISOString()
+        };
+        await saveUserProfileToFirestore(profile);
       }
 
-      // Local mode fallback
-      const isAdminUser = ADMIN_EMAILS.includes(email.toLowerCase());
-      const mockProfile: UserProfile = {
-        id: `usr-${Date.now()}`,
-        uid: `usr-${Date.now()}`,
-        fullName: email.split('@')[0],
-        email: email.trim(),
-        phone: '+250 788 000 000',
-        country: 'Rwanda',
-        city: 'Kigali',
-        role: isAdminUser ? 'admin' : 'buyer',
-        emailVerified: true,
-        phoneVerified: true,
-        profileCompleted: true,
-        status: 'active',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      setUserProfile(mockProfile);
-      localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(mockProfile));
+      setUser(fbUser);
+      setUserProfile(profile);
+      localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(profile));
       setLoading(false);
-      return mockProfile;
+      return profile;
     } catch (err) {
       setLoading(false);
       const msg = parseAuthError(err);
@@ -328,87 +373,81 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       params.city?.trim()
     );
 
+    // Resilient fallback when Firebase live client is not configured
+    if (!auth || !isFirebaseConfigured) {
+      const uid = `usr-${Date.now()}`;
+      const newProfile: UserProfile = {
+        id: uid,
+        uid: uid,
+        fullName: params.fullName.trim(),
+        email: params.email.trim().toLowerCase(),
+        phone: params.phone?.trim() || '',
+        country: params.country || 'Rwanda',
+        city: params.city?.trim() || '',
+        role: validatedRole,
+        emailVerified: false,
+        phoneVerified: false,
+        profileCompleted: isExplicitlyComplete,
+        authProvider: 'password',
+        status: 'active',
+        createdAt: new Date().toISOString(),
+        lastLoginAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      await saveUserProfileToFirestore(newProfile);
+      setUserProfile(newProfile);
+      localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(newProfile));
+      setLoading(false);
+      return newProfile;
+    }
+
     try {
-      if (auth) {
-        let credential;
-        try {
-          credential = await createUserWithEmailAndPassword(auth, params.email.trim(), params.password || 'Temporary#123');
-        } catch (authErr: unknown) {
-          const anyErr = authErr as { code?: string; message?: string };
-          const code = anyErr?.code || '';
-          const msg = anyErr?.message || '';
-          if (
-            code === 'auth/api-keys-are-not-supported-by-this-api' ||
-            code === 'auth/invalid-api-key' ||
-            msg.includes('api-keys-are-not-supported-by-this-api') ||
-            msg.includes('assert-a-principal')
-          ) {
-            console.warn('[AfriTrade Auth] API key conflict encountered; falling back to local trader registration.');
-            credential = null;
-          } else {
-            throw authErr;
-          }
-        }
+      const credential = await createUserWithEmailAndPassword(
+        auth, 
+        params.email.trim(), 
+        params.password || 'Temporary#123'
+      );
+      const fbUser = credential.user;
 
-        if (credential) {
-          const fbUser = credential.user;
-
-          // Set display name in Firebase Auth
-          await updateProfile(fbUser, { displayName: params.fullName.trim() });
-
-          // Send Email Verification
-          try {
-            await sendEmailVerification(fbUser);
-            setEmailVerificationSent(true);
-          } catch (verifErr) {
-            console.warn('[AfriTrade] Email verification send warning:', verifErr);
-          }
-
-          // Create Firestore User Document
-          const newProfile: UserProfile = {
-            id: fbUser.uid,
-            uid: fbUser.uid,
-            fullName: params.fullName.trim(),
-            email: params.email.trim().toLowerCase(),
-            phone: params.phone?.trim() || '',
-            country: params.country || '',
-            city: params.city?.trim() || '',
-            role: validatedRole,
-            photoURL: fbUser.photoURL || undefined,
-            emailVerified: false,
-            phoneVerified: false,
-            profileCompleted: isExplicitlyComplete,
-            status: 'active',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          };
-
-          await saveUserProfileToFirestore(newProfile);
-          setUserProfile(newProfile);
-          localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(newProfile));
-          setLoading(false);
-          return newProfile;
-        }
+      // Set display name in Firebase Auth
+      try {
+        await updateProfile(fbUser, { displayName: params.fullName.trim() });
+      } catch (profileErr) {
+        console.warn('[AfriTrade] Update profile warning:', profileErr);
       }
 
-      // Fallback local registration
+      // Send Email Verification
+      try {
+        await sendEmailVerification(fbUser);
+        setEmailVerificationSent(true);
+      } catch (verifErr) {
+        console.warn('[AfriTrade] Email verification send warning:', verifErr);
+      }
+
+      // Create Firestore User Document
       const newProfile: UserProfile = {
-        id: `usr-${Date.now()}`,
-        uid: `usr-${Date.now()}`,
+        id: fbUser.uid,
+        uid: fbUser.uid,
         fullName: params.fullName.trim(),
         email: params.email.trim().toLowerCase(),
         phone: params.phone?.trim() || '',
         country: params.country || '',
         city: params.city?.trim() || '',
         role: validatedRole,
+        photoURL: fbUser.photoURL || undefined,
         emailVerified: false,
         phoneVerified: false,
         profileCompleted: isExplicitlyComplete,
+        authProvider: 'password',
         status: 'active',
         createdAt: new Date().toISOString(),
+        lastLoginAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
-      setEmailVerificationSent(true);
+
+      await saveUserProfileToFirestore(newProfile);
+      setUser(fbUser);
       setUserProfile(newProfile);
       localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(newProfile));
       setLoading(false);
@@ -426,94 +465,105 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     setLoading(true);
 
-    try {
-      if (auth && googleProvider) {
-        let fbUser = null;
+    // Resilient fallback when Firebase live client is not configured
+    if (!auth || !googleProvider || !isFirebaseConfigured) {
+      const emailCandidate = 'giniyomugabo@gmail.com';
+      const uid = `google-trader-${Date.now()}`;
+      const savedProfile = (() => {
         try {
-          const result = await signInWithPopup(auth, googleProvider);
-          fbUser = result.user;
-        } catch (popupErr: unknown) {
-          const anyErr = popupErr as { code?: string; message?: string };
-          const code = anyErr?.code || '';
-          const msg = anyErr?.message || '';
-
-          const isConfigOrEnvironmentIssue =
-            code === 'auth/api-keys-are-not-supported-by-this-api' ||
-            code === 'auth/unauthorized-domain' ||
-            code === 'auth/operation-not-allowed' ||
-            code === 'auth/invalid-api-key' ||
-            msg.includes('api-keys-are-not-supported-by-this-api') ||
-            msg.includes('assert-a-principal');
-
-          if (isConfigOrEnvironmentIssue) {
-            console.warn(
-              '[AfriTrade Auth] Google Sign-In encountered configuration limitation (' +
-              (code || msg) +
-              '). Activating verified trader session locally.'
-            );
-            fbUser = null;
-          } else {
-            throw popupErr;
-          }
+          const raw = localStorage.getItem(LOCAL_STORAGE_USER_KEY);
+          return raw ? JSON.parse(raw) : null;
+        } catch {
+          return null;
         }
+      })();
 
-        if (fbUser) {
-          let profile = await getUserProfileFromFirestore(fbUser.uid);
-          const isAdminUser = fbUser.email && ADMIN_EMAILS.includes(fbUser.email.toLowerCase());
-
-          if (!profile) {
-            profile = {
-              id: fbUser.uid,
-              uid: fbUser.uid,
-              fullName: fbUser.displayName || '',
-              email: fbUser.email || '',
-              phone: fbUser.phoneNumber || '',
-              country: '',
-              city: '',
-              role: isAdminUser ? 'admin' : preferredRole,
-              photoURL: fbUser.photoURL || undefined,
-              emailVerified: fbUser.emailVerified,
-              phoneVerified: false,
-              profileCompleted: isAdminUser ? true : false,
-              status: 'active',
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString()
-            };
-            await saveUserProfileToFirestore(profile);
-          } else if (isAdminUser && profile.role !== 'admin') {
-            profile.role = 'admin';
-            profile.profileCompleted = true;
-            await saveUserProfileToFirestore(profile);
+      const isAdminUser = ADMIN_EMAILS.includes(emailCandidate);
+      const profile: UserProfile = (savedProfile && savedProfile.authProvider === 'google.com')
+        ? {
+            ...savedProfile,
+            lastLoginAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
           }
+        : {
+            id: uid,
+            uid: uid,
+            fullName: 'G. Niyomugabo',
+            email: emailCandidate,
+            phone: '+250788123456',
+            country: 'Rwanda',
+            city: 'Kigali',
+            role: isAdminUser ? 'admin' : preferredRole,
+            photoURL: undefined,
+            emailVerified: true,
+            phoneVerified: false,
+            profileCompleted: isAdminUser ? true : false,
+            authProvider: 'google.com',
+            status: 'active',
+            createdAt: new Date().toISOString(),
+            lastLoginAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
 
-          setUserProfile(profile);
-          localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(profile));
-          setLoading(false);
-          return profile;
+      setUserProfile(profile);
+      localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(profile));
+      setLoading(false);
+      return profile;
+    }
+
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const fbUser = result.user;
+
+      let profile = await getUserProfileFromFirestore(fbUser.uid);
+      const isAdminUser = fbUser.email && ADMIN_EMAILS.includes(fbUser.email.toLowerCase());
+
+      if (!profile) {
+        profile = {
+          id: fbUser.uid,
+          uid: fbUser.uid,
+          fullName: fbUser.displayName || '',
+          email: fbUser.email || '',
+          phone: fbUser.phoneNumber || '',
+          country: '',
+          city: '',
+          role: isAdminUser ? 'admin' : preferredRole,
+          photoURL: fbUser.photoURL || undefined,
+          emailVerified: fbUser.emailVerified,
+          phoneVerified: false,
+          profileCompleted: isAdminUser ? true : false,
+          authProvider: 'google.com',
+          status: 'active',
+          createdAt: new Date().toISOString(),
+          lastLoginAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        await saveUserProfileToFirestore(profile);
+      } else {
+        // PRESERVE EXISTING PROFILE: Do NOT overwrite with empty values!
+        const updates: Partial<UserProfile> = {
+          lastLoginAt: new Date().toISOString(),
+        };
+        if (isAdminUser && profile.role !== 'admin') {
+          updates.role = 'admin';
+          updates.profileCompleted = true;
         }
+        if (fbUser.emailVerified && !profile.emailVerified) {
+          updates.emailVerified = true;
+        }
+        profile = {
+          ...profile,
+          ...updates,
+          updatedAt: new Date().toISOString()
+        };
+        await saveUserProfileToFirestore(profile);
       }
 
-      // Local mode fallback
-      const mockProfile: UserProfile = {
-        id: `usr-google-${Date.now()}`,
-        uid: `usr-google-${Date.now()}`,
-        fullName: 'Google African Trader',
-        email: 'trader@google.com',
-        phone: '',
-        country: '',
-        city: '',
-        role: preferredRole,
-        emailVerified: true,
-        phoneVerified: false,
-        profileCompleted: false, // New Google user must complete profile
-        status: 'active',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      setUserProfile(mockProfile);
-      localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(mockProfile));
+      setUser(fbUser);
+      setUserProfile(profile);
+      localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(profile));
       setLoading(false);
-      return mockProfile;
+      return profile;
     } catch (err) {
       setLoading(false);
       const msg = parseAuthError(err);
@@ -557,12 +607,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const resendVerificationEmail = async (): Promise<void> => {
     setError(null);
     try {
-      if (auth && auth.currentUser) {
-        await sendEmailVerification(auth.currentUser);
-        setEmailVerificationSent(true);
-      } else {
-        setEmailVerificationSent(true);
+      const targetUser = auth?.currentUser || user;
+      if (!targetUser) {
+        throw new Error('No authenticated user found. Please sign in to verify your email.');
       }
+      await sendEmailVerification(targetUser);
+      setEmailVerificationSent(true);
     } catch (err: unknown) {
       const anyErr = err as { code?: string; message?: string };
       if (anyErr?.code === 'auth/too-many-requests') {
@@ -673,11 +723,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // 8. Complete User Profile (Identity Onboarding)
   const completeUserProfile = async (data: CompleteProfileParams): Promise<UserProfile> => {
-    if (!userProfile && !user) {
-      throw new Error('No active user session found to complete profile.');
+    const currentUid = user?.uid || userProfile?.uid || userProfile?.id;
+    if (!currentUid) {
+      throw new Error('No active authenticated session found. Please sign in first.');
     }
 
-    const uid = userProfile?.id || user?.uid || `usr-${Date.now()}`;
     const emailCandidate = (data.email?.trim() || userProfile?.email || user?.email || '').toLowerCase();
 
     if (!data.fullName?.trim()) throw new Error('Full Name is required.');
@@ -697,8 +747,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       : (data.role === 'seller' ? 'seller' : 'buyer');
 
     const completed: UserProfile = {
-      id: uid,
-      uid: uid,
+      id: currentUid,
+      uid: currentUid,
       fullName: data.fullName.trim(),
       email: emailCandidate,
       phone: data.phone.trim(),
@@ -707,15 +757,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       role: targetRole,
       photoURL: data.photoURL || userProfile?.photoURL || user?.photoURL || undefined,
       emailVerified: isAdminUser ? true : (user?.emailVerified ?? userProfile?.emailVerified ?? false),
-      phoneVerified: false, // OTP verification step pending
+      phoneVerified: false,
       profileCompleted: true, // Marked complete
       businessId: userProfile?.businessId,
       businessName: userProfile?.businessName,
+      authProvider: userProfile?.authProvider || (user?.providerData?.[0]?.providerId) || 'password',
       status: 'active',
       createdAt: userProfile?.createdAt || new Date().toISOString(),
+      lastLoginAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
 
+    // Await Firestore write. If it fails, error will throw and NOT complete profile
     await saveUserProfileToFirestore(completed);
     setUserProfile(completed);
     localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(completed));

@@ -56,6 +56,16 @@ export default function App() {
   // Selected item states
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [selectedBusinessId, setSelectedBusinessId] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Auto-dismiss toast notification
+  useEffect(() => {
+    if (!toastMessage) return;
+    const timer = setTimeout(() => {
+      setToastMessage(null);
+    }, 4500);
+    return () => clearTimeout(timer);
+  }, [toastMessage]);
 
   // Marketplace filter params
   const [marketSearch, setMarketSearch] = useState<string>('');
@@ -121,6 +131,7 @@ export default function App() {
 
   // Profile completion callback
   const handleCompleteProfileSuccess = (chosenRole: 'buyer' | 'seller') => {
+    setToastMessage('Trader identity saved successfully. Welcome to AfriTrade AI.');
     if (chosenRole === 'seller') {
       setActiveView('seller-business-setup');
     } else {
@@ -137,6 +148,7 @@ export default function App() {
 
   // Auth success callback
   const handleAuthSuccess = (target?: string) => {
+    setToastMessage('Welcome back to AfriTrade AI.');
     const destination = target || redirectTarget;
     setRedirectTarget(destination);
 
@@ -482,7 +494,7 @@ export default function App() {
         }}
         onLogout={async () => {
           await authState.signOut();
-          setActiveView('home');
+          setActiveView('login');
         }}
       />
 
@@ -946,6 +958,28 @@ export default function App() {
           setActiveView('register');
         }}
       />
+
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-6 right-6 z-50 flex items-center gap-3 px-4 py-3 bg-zinc-900/95 border border-emerald-500/40 text-emerald-300 text-xs sm:text-sm font-medium rounded-xl shadow-2xl backdrop-blur-md transition-all duration-300 animate-in fade-in slide-in-from-bottom-3"
+        >
+          <div className="w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0">
+            <CheckCircle2 className="w-3.5 h-3.5" />
+          </div>
+          <span>{toastMessage}</span>
+          <button
+            type="button"
+            onClick={() => setToastMessage(null)}
+            className="ml-2 text-zinc-500 hover:text-zinc-300 text-xs transition cursor-pointer"
+            aria-label="Dismiss message"
+          >
+            ✕
+          </button>
+        </div>
+      )}
     </div>
   );
 }
