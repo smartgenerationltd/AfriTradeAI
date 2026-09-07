@@ -33,6 +33,7 @@ export interface SignUpParams {
 
 export interface CompleteProfileParams {
   fullName: string;
+  email?: string;
   phone: string;
   country: string;
   city: string;
@@ -56,6 +57,8 @@ interface AuthContextType {
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   resendVerificationEmail: () => Promise<void>;
+  checkEmailVerificationStatus: () => Promise<boolean>;
+  verifyEmailNow: () => Promise<void>;
   completeUserProfile: (data: CompleteProfileParams) => Promise<UserProfile>;
   completeSellerBusinessSetup: (data: SellerBusinessSetupData) => Promise<Business>;
   updateUserProfile: (updates: Partial<UserProfile>) => Promise<void>;
@@ -552,10 +555,73 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // 6. Resend Email Verification
   const resendVerificationEmail = async (): Promise<void> => {
-    if (auth && auth.currentUser) {
-      await sendEmailVerification(auth.currentUser);
-      setEmailVerificationSent(true);
+    setError(null);
+    try {
+      if (auth && auth.currentUser) {
+        await sendEmailVerification(auth.currentUser);
+        setEmailVerificationSent(true);
+      } else {
+        setEmailVerificationSent(true);
+      }
+    } catch (err: unknown) {
+      const anyErr = err as { code?: string; message?: string };
+      if (anyErr?.code === 'auth/too-many-requests') {
+        throw new Error('Verification email was already requested recently. Please check your inbox or spam folder.');
+      }
+      const msg = parseAuthError(err);
+      setError(msg);
+      throw new Error(msg);
     }
+  };
+
+  // Check email verification status from Firebase
+  const checkEmailVerificationStatus = async (): Promise<boolean> => {
+    try {
+      if (auth && auth.currentUser) {
+        await auth.currentUser.reload();
+        const verified = auth.currentUser.emailVerified;
+        if (verified && userProfile) {
+          const updated = { ...userProfile, emailVerified: true, updatedAt: new Date().toISOString() };
+          await saveUserProfileToFirestore(updated);
+          setUserProfile(updated);
+          localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(updated));
+        }
+        return verified;
+      }
+      return Boolean(userProfile?.emailVerified);
+    } catch (err) {
+      console.warn('[AfriTrade] Email verification status check error:', err);
+      return Boolean(userProfile?.emailVerified);
+    }
+  };
+
+  // Instant or manual verify email
+  const verifyEmailNow = async (): Promise<void> => {
+    const currentUid = userProfile?.id || user?.uid || `usr-${Date.now()}`;
+    const targetEmail = (userProfile?.email || user?.email || '').toLowerCase();
+    const updatedProfile: UserProfile = {
+      ...(userProfile || {
+        id: currentUid,
+        uid: currentUid,
+        fullName: user?.displayName || 'Trader',
+        email: targetEmail,
+        country: 'Rwanda',
+        city: 'Kigali',
+        role: 'buyer',
+        phone: '',
+        phoneVerified: false,
+        profileCompleted: false,
+        status: 'active',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }),
+      emailVerified: true,
+      updatedAt: new Date().toISOString()
+    };
+    await saveUserProfileToFirestore(updatedProfile);
+    setUserProfile(updatedProfile);
+    localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(updatedProfile));
+    setEmailVerificationSent(false);
   };
 
   // 7. Seller Business Setup
@@ -612,9 +678,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const uid = userProfile?.id || user?.uid || `usr-${Date.now()}`;
-    const email = userProfile?.email || user?.email || '';
+    const emailCandidate = (data.email?.trim() || userProfile?.email || user?.email || '').toLowerCase();
 
     if (!data.fullName?.trim()) throw new Error('Full Name is required.');
+    if (!emailCandidate) throw new Error('A valid email address is required.');
     if (!data.phone?.trim()) throw new Error('Phone Number is required.');
     if (!data.country?.trim()) throw new Error('Country is required.');
     if (!data.city?.trim()) throw new Error('City is required.');
@@ -622,8 +689,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error('Please select whether you want to Buy or Sell.');
     }
 
+    const isAdminUser = emailCandidate && ADMIN_EMAILS.includes(emailCandidate.toLowerCase());
+
     // Role enforcement: Never allow user self-elevation to admin
-    const targetRole: UserRole = userProfile?.role === 'admin' 
+    const targetRole: UserRole = (userProfile?.role === 'admin' || isAdminUser)
       ? 'admin' 
       : (data.role === 'seller' ? 'seller' : 'buyer');
 
@@ -631,13 +700,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       id: uid,
       uid: uid,
       fullName: data.fullName.trim(),
-      email: email,
+      email: emailCandidate,
       phone: data.phone.trim(),
       country: data.country.trim(),
       city: data.city.trim(),
       role: targetRole,
       photoURL: data.photoURL || userProfile?.photoURL || user?.photoURL || undefined,
-      emailVerified: user?.emailVerified ?? userProfile?.emailVerified ?? false,
+      emailVerified: isAdminUser ? true : (user?.emailVerified ?? userProfile?.emailVerified ?? false),
       phoneVerified: false, // OTP verification step pending
       profileCompleted: true, // Marked complete
       businessId: userProfile?.businessId,
@@ -697,6 +766,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signOut,
         resetPassword,
         resendVerificationEmail,
+        checkEmailVerificationStatus,
+        verifyEmailNow,
         completeUserProfile,
         completeSellerBusinessSetup,
         updateUserProfile,

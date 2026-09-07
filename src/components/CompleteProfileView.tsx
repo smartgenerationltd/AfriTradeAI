@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { AFRICAN_COUNTRIES } from '../data/seedData';
 import { 
   User, Mail, Phone, MapPin, Globe, ShieldCheck, 
-  ArrowRight, ShoppingCart, Store, AlertCircle, CheckCircle2 
+  ArrowRight, ShoppingCart, Store, AlertCircle, CheckCircle2, RefreshCw 
 } from 'lucide-react';
 
 interface CompleteProfileViewProps {
@@ -11,10 +11,19 @@ interface CompleteProfileViewProps {
 }
 
 export const CompleteProfileView: React.FC<CompleteProfileViewProps> = ({ onSuccess }) => {
-  const { user, userProfile, completeUserProfile, error: authError, clearError } = useAuth();
+  const { 
+    user, 
+    userProfile, 
+    completeUserProfile, 
+    resendVerificationEmail, 
+    checkEmailVerificationStatus, 
+    verifyEmailNow, 
+    error: authError, 
+    clearError 
+  } = useAuth();
 
   const [fullName, setFullName] = useState(userProfile?.fullName || user?.displayName || '');
-  const [email] = useState(userProfile?.email || user?.email || '');
+  const [email, setEmail] = useState(userProfile?.email || user?.email || '');
   const [phone, setPhone] = useState(userProfile?.phone || '');
   const [country, setCountry] = useState(userProfile?.country || 'Rwanda');
   const [city, setCity] = useState(userProfile?.city || '');
@@ -22,14 +31,89 @@ export const CompleteProfileView: React.FC<CompleteProfileViewProps> = ({ onSucc
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
+  const [verificationFeedback, setVerificationFeedback] = useState<{
+    type: 'success' | 'error' | 'info';
+    message: string;
+  } | null>(null);
+  const [verifyingAction, setVerifyingAction] = useState(false);
+
+  const isEmailVerified = Boolean(user?.emailVerified || userProfile?.emailVerified);
+
   useEffect(() => {
     if (userProfile?.fullName && !fullName) {
       setFullName(userProfile.fullName);
     }
+    if ((userProfile?.email || user?.email) && !email) {
+      setEmail(userProfile?.email || user?.email || '');
+    }
     if (userProfile?.country && !country) {
       setCountry(userProfile.country);
     }
-  }, [userProfile]);
+  }, [userProfile, user]);
+
+  const handleResendVerification = async () => {
+    setVerifyingAction(true);
+    setVerificationFeedback(null);
+    try {
+      await resendVerificationEmail();
+      setVerificationFeedback({
+        type: 'info',
+        message: `Verification link sent to ${email || 'your email'}! Please check your inbox or spam folder.`
+      });
+    } catch (err) {
+      setVerificationFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Unable to send verification email.'
+      });
+    } finally {
+      setVerifyingAction(false);
+    }
+  };
+
+  const handleCheckVerification = async () => {
+    setVerifyingAction(true);
+    setVerificationFeedback(null);
+    try {
+      const verified = await checkEmailVerificationStatus();
+      if (verified) {
+        setVerificationFeedback({
+          type: 'success',
+          message: 'Your email address is verified!'
+        });
+      } else {
+        setVerificationFeedback({
+          type: 'info',
+          message: 'Verification check pending. If you just clicked the link in your email, please try again or click "Verify Now".'
+        });
+      }
+    } catch (err) {
+      setVerificationFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Unable to check verification status.'
+      });
+    } finally {
+      setVerifyingAction(false);
+    }
+  };
+
+  const handleVerifyNow = async () => {
+    setVerifyingAction(true);
+    setVerificationFeedback(null);
+    try {
+      await verifyEmailNow();
+      setVerificationFeedback({
+        type: 'success',
+        message: 'Email verified successfully! Your trader credentials are active.'
+      });
+    } catch (err) {
+      setVerificationFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to verify email.'
+      });
+    } finally {
+      setVerifyingAction(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,6 +122,15 @@ export const CompleteProfileView: React.FC<CompleteProfileViewProps> = ({ onSucc
 
     if (!fullName.trim()) {
       setLocalError('Please provide your legal full name.');
+      return;
+    }
+    if (!email.trim()) {
+      setLocalError('Please provide a valid email address.');
+      return;
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      setLocalError('Please enter a valid email format (e.g. name@domain.com).');
       return;
     }
     if (!phone.trim()) {
@@ -57,6 +150,7 @@ export const CompleteProfileView: React.FC<CompleteProfileViewProps> = ({ onSucc
       setSubmitting(true);
       await completeUserProfile({
         fullName: fullName.trim(),
+        email: email.trim(),
         phone: phone.trim(),
         country: country.trim(),
         city: city.trim(),
@@ -95,11 +189,12 @@ export const CompleteProfileView: React.FC<CompleteProfileViewProps> = ({ onSucc
       <form onSubmit={handleSubmit} className="space-y-5">
         {/* Full Name */}
         <div>
-          <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+          <label htmlFor="trader-identity-fullname" className="block text-xs font-semibold text-zinc-300 mb-1.5">
             Full Legal Name *
           </label>
           <div className="relative">
             <input
+              id="trader-identity-fullname"
               type="text"
               required
               value={fullName}
@@ -111,31 +206,104 @@ export const CompleteProfileView: React.FC<CompleteProfileViewProps> = ({ onSucc
           </div>
         </div>
 
-        {/* Email (Read-only from authenticated session) */}
+        {/* Email Address (Active, editable, with real-time verification controls) */}
         <div>
-          <div className="flex items-center justify-between mb-1.5">
-            <label className="text-xs font-semibold text-zinc-300">
-              Verified Email Address
+          <div className="flex flex-wrap items-center justify-between gap-1 mb-1.5">
+            <label htmlFor="trader-identity-email" className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+              <span>Email Address *</span>
+              {isEmailVerified ? (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/30 rounded-full text-[10px] text-emerald-400 font-mono">
+                  <CheckCircle2 className="w-3 h-3" />
+                  Verified
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-500/10 border border-amber-500/30 rounded-full text-[10px] text-amber-400 font-mono">
+                  <AlertCircle className="w-3 h-3" />
+                  Unverified
+                </span>
+              )}
             </label>
-            <span className="text-[11px] font-mono text-zinc-500">
-              Authenticated Session
-            </span>
+
+            <div className="flex items-center gap-2">
+              {!isEmailVerified && (
+                <>
+                  <button
+                    type="button"
+                    id="resend-verification-btn"
+                    onClick={handleResendVerification}
+                    disabled={verifyingAction}
+                    className="text-[11px] text-amber-400 hover:text-amber-300 font-medium transition cursor-pointer disabled:opacity-50"
+                  >
+                    Send Link
+                  </button>
+                  <span className="text-zinc-600 text-xs">|</span>
+                  <button
+                    type="button"
+                    id="check-verification-btn"
+                    onClick={handleCheckVerification}
+                    disabled={verifyingAction}
+                    className="text-[11px] text-zinc-400 hover:text-zinc-200 transition cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${verifyingAction ? 'animate-spin' : ''}`} />
+                    <span>Check</span>
+                  </button>
+                  <span className="text-zinc-600 text-xs">|</span>
+                  <button
+                    type="button"
+                    id="instant-verify-btn"
+                    onClick={handleVerifyNow}
+                    disabled={verifyingAction}
+                    className="text-[11px] text-emerald-400 hover:text-emerald-300 font-medium transition cursor-pointer flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <CheckCircle2 className="w-3 h-3" />
+                    <span>Verify Now</span>
+                  </button>
+                </>
+              )}
+            </div>
           </div>
+
           <div className="relative">
             <input
+              id="trader-identity-email"
               type="email"
-              disabled
+              required
               value={email}
-              className="w-full pl-9 pr-3 py-2.5 bg-zinc-950/60 border border-zinc-800/80 rounded-xl text-xs sm:text-sm text-zinc-400 cursor-not-allowed outline-hidden"
+              onChange={(e) => {
+                setEmail(e.target.value);
+                if (verificationFeedback) setVerificationFeedback(null);
+              }}
+              placeholder="e.g. name@domain.com"
+              className="w-full pl-9 pr-24 py-2.5 bg-zinc-950 border border-zinc-800 focus:border-zinc-500 rounded-xl text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 outline-hidden transition"
             />
-            <Mail className="w-4 h-4 text-zinc-500 absolute left-3 top-3" />
+            <Mail className="w-4 h-4 text-zinc-500 absolute left-3 top-3 pointer-events-none" />
+            {isEmailVerified && (
+              <div className="absolute right-3 top-2.5 flex items-center gap-1 text-emerald-400 text-xs font-mono">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Verified</span>
+              </div>
+            )}
           </div>
+
+          {verificationFeedback && (
+            <p className={`mt-1.5 text-[11px] font-medium flex items-center gap-1.5 ${
+              verificationFeedback.type === 'success' ? 'text-emerald-400' :
+              verificationFeedback.type === 'error' ? 'text-red-400' : 'text-amber-400'
+            }`}>
+              {verificationFeedback.type === 'success' ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 shrink-0" />}
+              <span>{verificationFeedback.message}</span>
+            </p>
+          )}
+
+          <p className="mt-1 text-[11px] text-zinc-500">
+            Official trade notices, digital invoices, and AfCFTA customs documents will be dispatched to this email.
+          </p>
         </div>
 
         {/* Phone Number */}
         <div>
           <div className="flex items-center justify-between mb-1.5">
-            <label className="text-xs font-semibold text-zinc-300">
+            <label htmlFor="trader-identity-phone" className="text-xs font-semibold text-zinc-300">
               Phone Number (with Country Dial Code) *
             </label>
             <span className="text-[11px] text-amber-400 font-mono">
@@ -144,6 +312,7 @@ export const CompleteProfileView: React.FC<CompleteProfileViewProps> = ({ onSucc
           </div>
           <div className="relative">
             <input
+              id="trader-identity-phone"
               type="tel"
               required
               value={phone}
@@ -161,11 +330,12 @@ export const CompleteProfileView: React.FC<CompleteProfileViewProps> = ({ onSucc
         {/* Country & City Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+            <label htmlFor="trader-identity-country" className="block text-xs font-semibold text-zinc-300 mb-1.5">
               Country of Residence / Operation *
             </label>
             <div className="relative">
               <select
+                id="trader-identity-country"
                 value={country}
                 onChange={(e) => setCountry(e.target.value)}
                 className="w-full pl-9 pr-8 py-2.5 bg-zinc-950 border border-zinc-800 focus:border-zinc-500 rounded-xl text-xs sm:text-sm text-zinc-100 outline-hidden transition appearance-none"
@@ -181,11 +351,12 @@ export const CompleteProfileView: React.FC<CompleteProfileViewProps> = ({ onSucc
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+            <label htmlFor="trader-identity-city" className="block text-xs font-semibold text-zinc-300 mb-1.5">
               City / Commercial Hub *
             </label>
             <div className="relative">
               <input
+                id="trader-identity-city"
                 type="text"
                 required
                 value={city}
@@ -206,6 +377,7 @@ export const CompleteProfileView: React.FC<CompleteProfileViewProps> = ({ onSucc
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <button
               type="button"
+              id="role-select-buyer"
               onClick={() => setRole('buyer')}
               className={`p-4 rounded-xl border text-left flex items-start gap-3.5 transition cursor-pointer ${
                 role === 'buyer'
@@ -229,6 +401,7 @@ export const CompleteProfileView: React.FC<CompleteProfileViewProps> = ({ onSucc
 
             <button
               type="button"
+              id="role-select-seller"
               onClick={() => setRole('seller')}
               className={`p-4 rounded-xl border text-left flex items-start gap-3.5 transition cursor-pointer ${
                 role === 'seller'
@@ -260,6 +433,7 @@ export const CompleteProfileView: React.FC<CompleteProfileViewProps> = ({ onSucc
         {/* Submit button */}
         <button
           type="submit"
+          id="complete-profile-submit-btn"
           disabled={submitting}
           className="w-full py-3 px-4 bg-zinc-100 hover:bg-white text-zinc-950 text-xs sm:text-sm font-semibold rounded-xl flex items-center justify-center gap-2 transition shadow-md disabled:opacity-50 cursor-pointer"
         >
@@ -270,3 +444,4 @@ export const CompleteProfileView: React.FC<CompleteProfileViewProps> = ({ onSucc
     </div>
   );
 };
+
