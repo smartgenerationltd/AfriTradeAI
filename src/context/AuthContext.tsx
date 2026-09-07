@@ -19,14 +19,25 @@ import {
   isFirebaseConfigured
 } from '../services/firebase';
 import { UserProfile, UserRole, SellerBusinessSetupData, Business } from '../types';
+import { isProfileComplete } from '../services/authUtils';
 
 export interface SignUpParams {
   fullName: string;
   email: string;
   password?: string;
+  phone?: string;
+  country?: string;
+  city?: string;
+  role?: 'buyer' | 'seller'; // Admin is strictly prohibited from public registration!
+}
+
+export interface CompleteProfileParams {
+  fullName: string;
   phone: string;
   country: string;
-  role: 'buyer' | 'seller'; // Admin is strictly prohibited from public registration!
+  city: string;
+  role: 'buyer' | 'seller';
+  photoURL?: string;
 }
 
 interface AuthContextType {
@@ -35,6 +46,7 @@ interface AuthContextType {
   role: UserRole | null;
   loading: boolean;
   isAuthenticated: boolean;
+  isProfileComplete: boolean;
   isFirebaseReady: boolean;
   error: string | null;
   clearError: () => void;
@@ -44,6 +56,7 @@ interface AuthContextType {
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   resendVerificationEmail: () => Promise<void>;
+  completeUserProfile: (data: CompleteProfileParams) => Promise<UserProfile>;
   completeSellerBusinessSetup: (data: SellerBusinessSetupData) => Promise<Business>;
   updateUserProfile: (updates: Partial<UserProfile>) => Promise<void>;
   businessVerificationPending: boolean;
@@ -92,14 +105,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             // Profile doesn't exist yet (e.g. initial Google sign-in)
             profile = {
               id: fbUser.uid,
-              fullName: fbUser.displayName || 'AfriTrade Trader',
+              uid: fbUser.uid,
+              fullName: fbUser.displayName || '',
               email: fbUser.email || '',
               phone: fbUser.phoneNumber || '',
-              country: 'Rwanda',
-              city: 'Kigali',
+              country: '',
+              city: '',
               role: isAdminUser ? 'admin' : 'buyer', // Default to buyer unless verified admin email
               photoURL: fbUser.photoURL || undefined,
               emailVerified: fbUser.emailVerified,
+              phoneVerified: false,
+              profileCompleted: isAdminUser ? true : false,
               status: 'active',
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString()
@@ -107,6 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             await saveUserProfileToFirestore(profile);
           } else if (isAdminUser && profile.role !== 'admin') {
             profile.role = 'admin';
+            profile.profileCompleted = true;
             await saveUserProfileToFirestore(profile);
           }
 
@@ -239,13 +256,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const isAdminUser = fbUser.email && ADMIN_EMAILS.includes(fbUser.email.toLowerCase());
             profile = {
               id: fbUser.uid,
-              fullName: fbUser.displayName || 'AfriTrade Trader',
+              uid: fbUser.uid,
+              fullName: fbUser.displayName || '',
               email: fbUser.email || email,
               phone: '',
-              country: 'Rwanda',
-              city: 'Kigali',
+              country: '',
+              city: '',
               role: isAdminUser ? 'admin' : 'buyer',
               emailVerified: fbUser.emailVerified,
+              phoneVerified: false,
+              profileCompleted: isAdminUser ? true : false,
               status: 'active',
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString()
@@ -264,6 +284,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const isAdminUser = ADMIN_EMAILS.includes(email.toLowerCase());
       const mockProfile: UserProfile = {
         id: `usr-${Date.now()}`,
+        uid: `usr-${Date.now()}`,
         fullName: email.split('@')[0],
         email: email.trim(),
         phone: '+250 788 000 000',
@@ -271,6 +292,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         city: 'Kigali',
         role: isAdminUser ? 'admin' : 'buyer',
         emailVerified: true,
+        phoneVerified: true,
+        profileCompleted: true,
         status: 'active',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -294,6 +317,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // CRITICAL SECURITY ENFORCEMENT: Only 'buyer' or 'seller' allowed from registration
     const validatedRole: UserRole = params.role === 'seller' ? 'seller' : 'buyer';
+    const isExplicitlyComplete = Boolean(
+      params.fullName?.trim() &&
+      params.email?.trim() &&
+      params.phone?.trim() &&
+      params.country?.trim() &&
+      params.city?.trim()
+    );
 
     try {
       if (auth) {
@@ -334,14 +364,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // Create Firestore User Document
           const newProfile: UserProfile = {
             id: fbUser.uid,
+            uid: fbUser.uid,
             fullName: params.fullName.trim(),
             email: params.email.trim().toLowerCase(),
-            phone: params.phone.trim(),
-            country: params.country,
-            city: '',
+            phone: params.phone?.trim() || '',
+            country: params.country || '',
+            city: params.city?.trim() || '',
             role: validatedRole,
             photoURL: fbUser.photoURL || undefined,
             emailVerified: false,
+            phoneVerified: false,
+            profileCompleted: isExplicitlyComplete,
             status: 'active',
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
@@ -358,13 +391,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Fallback local registration
       const newProfile: UserProfile = {
         id: `usr-${Date.now()}`,
+        uid: `usr-${Date.now()}`,
         fullName: params.fullName.trim(),
         email: params.email.trim().toLowerCase(),
-        phone: params.phone.trim(),
-        country: params.country,
-        city: '',
+        phone: params.phone?.trim() || '',
+        country: params.country || '',
+        city: params.city?.trim() || '',
         role: validatedRole,
         emailVerified: false,
+        phoneVerified: false,
+        profileCompleted: isExplicitlyComplete,
         status: 'active',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -425,14 +461,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (!profile) {
             profile = {
               id: fbUser.uid,
-              fullName: fbUser.displayName || 'AfriTrade Trader',
+              uid: fbUser.uid,
+              fullName: fbUser.displayName || '',
               email: fbUser.email || '',
               phone: fbUser.phoneNumber || '',
-              country: 'Rwanda',
-              city: 'Kigali',
+              country: '',
+              city: '',
               role: isAdminUser ? 'admin' : preferredRole,
               photoURL: fbUser.photoURL || undefined,
               emailVerified: fbUser.emailVerified,
+              phoneVerified: false,
+              profileCompleted: isAdminUser ? true : false,
               status: 'active',
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString()
@@ -440,6 +479,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             await saveUserProfileToFirestore(profile);
           } else if (isAdminUser && profile.role !== 'admin') {
             profile.role = 'admin';
+            profile.profileCompleted = true;
             await saveUserProfileToFirestore(profile);
           }
 
@@ -453,13 +493,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Local mode fallback
       const mockProfile: UserProfile = {
         id: `usr-google-${Date.now()}`,
+        uid: `usr-google-${Date.now()}`,
         fullName: 'Google African Trader',
         email: 'trader@google.com',
-        phone: '+254 700 000 000',
-        country: 'Kenya',
-        city: 'Nairobi',
+        phone: '',
+        country: '',
+        city: '',
         role: preferredRole,
         emailVerified: true,
+        phoneVerified: false,
+        profileCompleted: false, // New Google user must complete profile
         status: 'active',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -562,7 +605,55 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return newBusiness;
   };
 
-  // 8. Update User Profile (Strictly disallowing self-assigned admin / role tampering)
+  // 8. Complete User Profile (Identity Onboarding)
+  const completeUserProfile = async (data: CompleteProfileParams): Promise<UserProfile> => {
+    if (!userProfile && !user) {
+      throw new Error('No active user session found to complete profile.');
+    }
+
+    const uid = userProfile?.id || user?.uid || `usr-${Date.now()}`;
+    const email = userProfile?.email || user?.email || '';
+
+    if (!data.fullName?.trim()) throw new Error('Full Name is required.');
+    if (!data.phone?.trim()) throw new Error('Phone Number is required.');
+    if (!data.country?.trim()) throw new Error('Country is required.');
+    if (!data.city?.trim()) throw new Error('City is required.');
+    if (!data.role || !['buyer', 'seller'].includes(data.role)) {
+      throw new Error('Please select whether you want to Buy or Sell.');
+    }
+
+    // Role enforcement: Never allow user self-elevation to admin
+    const targetRole: UserRole = userProfile?.role === 'admin' 
+      ? 'admin' 
+      : (data.role === 'seller' ? 'seller' : 'buyer');
+
+    const completed: UserProfile = {
+      id: uid,
+      uid: uid,
+      fullName: data.fullName.trim(),
+      email: email,
+      phone: data.phone.trim(),
+      country: data.country.trim(),
+      city: data.city.trim(),
+      role: targetRole,
+      photoURL: data.photoURL || userProfile?.photoURL || user?.photoURL || undefined,
+      emailVerified: user?.emailVerified ?? userProfile?.emailVerified ?? false,
+      phoneVerified: false, // OTP verification step pending
+      profileCompleted: true, // Marked complete
+      businessId: userProfile?.businessId,
+      businessName: userProfile?.businessName,
+      status: 'active',
+      createdAt: userProfile?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    await saveUserProfileToFirestore(completed);
+    setUserProfile(completed);
+    localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(completed));
+    return completed;
+  };
+
+  // 9. Update User Profile (Strictly disallowing self-assigned admin / role tampering)
   const updateUserProfile = async (updates: Partial<UserProfile>): Promise<void> => {
     if (!userProfile) return;
 
@@ -586,6 +677,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     userProfile?.role === 'seller' && userProfile?.businessId
   );
 
+  const profileIsComplete = isProfileComplete(userProfile);
+
   return (
     <AuthContext.Provider
       value={{
@@ -594,6 +687,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         role: userProfile?.role || null,
         loading,
         isAuthenticated: Boolean(userProfile),
+        isProfileComplete: profileIsComplete,
         isFirebaseReady: isFirebaseConfigured,
         error,
         clearError,
@@ -603,6 +697,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signOut,
         resetPassword,
         resendVerificationEmail,
+        completeUserProfile,
         completeSellerBusinessSetup,
         updateUserProfile,
         businessVerificationPending,

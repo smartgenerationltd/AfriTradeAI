@@ -2,6 +2,7 @@ export type UserRole = 'buyer' | 'seller' | 'admin';
 
 export interface UserProfile {
   id: string;
+  uid?: string; // Firebase Authentication UID
   fullName: string;
   email: string;
   phone: string;
@@ -12,6 +13,8 @@ export interface UserProfile {
   businessId?: string;
   photoURL?: string;
   emailVerified?: boolean;
+  phoneVerified?: boolean;
+  profileCompleted: boolean;
   createdAt: string;
   updatedAt: string;
   status: 'active' | 'suspended';

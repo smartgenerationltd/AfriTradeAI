@@ -28,6 +28,7 @@ const STORAGE_KEYS = {
 export const DEMO_USERS: Record<string, UserProfile> = {
   buyer: {
     id: 'user-buyer-ke',
+    uid: 'user-buyer-ke',
     fullName: 'Amina Kimani',
     email: 'amina@nairobispecialty.co.ke',
     phone: '+254 722 888 777',
@@ -36,12 +37,16 @@ export const DEMO_USERS: Record<string, UserProfile> = {
     role: 'buyer',
     businessName: 'Nairobi Specialty Importers Ltd',
     photoURL: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=200&h=200&q=80',
+    emailVerified: true,
+    phoneVerified: true,
+    profileCompleted: true,
     createdAt: '2024-01-10T08:00:00Z',
     updatedAt: '2025-08-01T09:00:00Z',
     status: 'active'
   },
   seller: {
     id: 'user-seller-rw',
+    uid: 'user-seller-rw',
     fullName: 'Jean-Paul Ngarambe',
     email: 'export@kigalicraftagro.rw',
     phone: '+250 788 123 456',
@@ -51,12 +56,16 @@ export const DEMO_USERS: Record<string, UserProfile> = {
     businessId: 'biz-kigali-craft',
     businessName: 'Kigali Craft & Agro Export Ltd',
     photoURL: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&h=200&q=80',
+    emailVerified: true,
+    phoneVerified: true,
+    profileCompleted: true,
     createdAt: '2024-01-15T09:00:00Z',
     updatedAt: '2025-08-10T11:30:00Z',
     status: 'active'
   },
   admin: {
     id: 'user-admin-01',
+    uid: 'user-admin-01',
     fullName: 'David Osei (AfriTrade Operations)',
     email: 'admin@afritrade.ai',
     phone: '+250 788 000 111',
@@ -64,6 +73,9 @@ export const DEMO_USERS: Record<string, UserProfile> = {
     city: 'Kigali',
     role: 'admin',
     photoURL: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=200&h=200&q=80',
+    emailVerified: true,
+    phoneVerified: true,
+    profileCompleted: true,
     createdAt: '2023-10-01T08:00:00Z',
     updatedAt: '2025-08-01T08:00:00Z',
     status: 'active'

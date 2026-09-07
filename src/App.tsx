@@ -25,6 +25,7 @@ import { AboutView } from './components/AboutView';
 import { HowItWorksView } from './components/HowItWorksView';
 import { PrivacyPolicyView, TermsOfServiceView } from './components/LegalViews';
 import { ProfileView } from './components/ProfileView';
+import { CompleteProfileView } from './components/CompleteProfileView';
 import { AuthGateModal } from './components/AuthGateModal';
 import { Product, UserRole } from './types';
 import { LanguageCode } from './i18n';
@@ -42,6 +43,7 @@ const PUBLIC_VIEWS = new Set([
   'forgot-password',
   'privacy-policy',
   'terms-of-service',
+  'complete-profile',
 ]);
 
 export default function App() {
@@ -105,13 +107,46 @@ export default function App() {
       return;
     }
 
+    // Check if view is protected and user has incomplete profile
+    if (authState.isAuthenticated && !authState.isProfileComplete && !PUBLIC_VIEWS.has(view)) {
+      setRedirectTarget(view);
+      setActiveView('complete-profile');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
     setActiveView(view);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Profile completion callback
+  const handleCompleteProfileSuccess = (chosenRole: 'buyer' | 'seller') => {
+    if (chosenRole === 'seller') {
+      setActiveView('seller-business-setup');
+    } else {
+      const destination = redirectTarget;
+      setRedirectTarget(null);
+      if (destination && !PUBLIC_VIEWS.has(destination)) {
+        setActiveView(destination);
+      } else {
+        setActiveView('buyer');
+      }
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   // Auth success callback
   const handleAuthSuccess = (target?: string) => {
     const destination = target || redirectTarget;
+    setRedirectTarget(destination);
+
+    // If profile is not complete, enforce complete-profile
+    if (!authState.isProfileComplete) {
+      setActiveView('complete-profile');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
     setRedirectTarget(null);
 
     if (destination && !PUBLIC_VIEWS.has(destination)) {
@@ -141,6 +176,9 @@ export default function App() {
     if (!authState.isAuthenticated) {
       setRedirectTarget('product-detail');
       setActiveView('login');
+    } else if (!authState.isProfileComplete) {
+      setRedirectTarget('product-detail');
+      setActiveView('complete-profile');
     } else {
       setActiveView('product-detail');
     }
@@ -152,6 +190,9 @@ export default function App() {
     if (!authState.isAuthenticated) {
       setRedirectTarget('business-detail');
       setActiveView('login');
+    } else if (!authState.isProfileComplete) {
+      setRedirectTarget('business-detail');
+      setActiveView('complete-profile');
     } else {
       setActiveView('business-detail');
     }
@@ -166,6 +207,9 @@ export default function App() {
     if (!authState.isAuthenticated) {
       setRedirectTarget('marketplace');
       setActiveView('login');
+    } else if (!authState.isProfileComplete) {
+      setRedirectTarget('marketplace');
+      setActiveView('complete-profile');
     } else {
       setActiveView('marketplace');
     }
@@ -186,6 +230,10 @@ export default function App() {
         featureDescription: 'Create your free AfriTrade AI account to use the AI Trade Assistant.',
         targetView: 'ai-trade-assistant'
       });
+    } else if (!authState.isProfileComplete) {
+      setRedirectTarget('ai-trade-assistant');
+      setActiveView('complete-profile');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     } else {
       setActiveView('ai-trade-assistant');
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -201,6 +249,9 @@ export default function App() {
     if (!authState.isAuthenticated) {
       setRedirectTarget('trade-calculator');
       setActiveView('login');
+    } else if (!authState.isProfileComplete) {
+      setRedirectTarget('trade-calculator');
+      setActiveView('complete-profile');
     } else {
       setActiveView('trade-calculator');
     }
@@ -215,6 +266,9 @@ export default function App() {
     if (!authState.isAuthenticated) {
       setRedirectTarget('trade-documents');
       setActiveView('login');
+    } else if (!authState.isProfileComplete) {
+      setRedirectTarget('trade-documents');
+      setActiveView('complete-profile');
     } else {
       setActiveView('trade-documents');
     }
@@ -232,6 +286,12 @@ export default function App() {
       });
       return;
     }
+    if (!authState.isProfileComplete) {
+      setRedirectTarget('marketplace');
+      setActiveView('complete-profile');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
     store.addToCart(product, quantity);
     setIsCartOpen(true);
   };
@@ -244,6 +304,12 @@ export default function App() {
         featureDescription: 'Create your free account or sign in to tender wholesale requests for quotation to African producers.',
         targetView: selectedProductId ? 'product-detail' : 'marketplace'
       });
+      return;
+    }
+    if (!authState.isProfileComplete) {
+      setRedirectTarget(selectedProductId ? 'product-detail' : 'marketplace');
+      setActiveView('complete-profile');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
     setQuoteProduct(product);
@@ -310,6 +376,7 @@ export default function App() {
   // Active view rendering check
   const isCurrentViewProtected = !PUBLIC_VIEWS.has(activeView);
   const showLoginGate = isCurrentViewProtected && !authState.isAuthenticated;
+  const showCompleteProfileGate = isCurrentViewProtected && authState.isAuthenticated && !authState.isProfileComplete;
 
   return (
     <div className="min-h-screen bg-[#09090b] text-zinc-100 flex flex-col font-sans selection:bg-zinc-800 selection:text-zinc-100">
@@ -335,6 +402,28 @@ export default function App() {
         </div>
       </div>
 
+      {/* Prominent warning banner for authenticated users with incomplete identification */}
+      {authState.isAuthenticated && !authState.isProfileComplete && (
+        <div className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2 text-xs text-amber-200 flex flex-wrap items-center justify-between gap-3 shadow-inner">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              <strong>Please complete your profile before continuing.</strong> To unlock Pan-African trading, customs compliance tools, and market discovery, full user identification is required.
+            </span>
+          </div>
+          <button
+            onClick={() => {
+              setActiveView('complete-profile');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            className="px-3 py-1 rounded-lg bg-amber-400 hover:bg-amber-300 text-zinc-950 text-xs font-bold transition shrink-0 flex items-center gap-1 cursor-pointer"
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>Complete Profile</span>
+          </button>
+        </div>
+      )}
+
       {/* Email verification notice banner if logged in without verified email */}
       {authState.isAuthenticated && authState.userProfile && !authState.userProfile.emailVerified && (
         <div className="bg-amber-950/70 border-b border-amber-800/80 px-4 py-2 text-xs text-amber-200 flex items-center justify-between gap-3">
@@ -356,6 +445,7 @@ export default function App() {
       {/* Main Navbar */}
       <Navbar
         currentUser={authState.userProfile}
+        isProfileComplete={authState.isProfileComplete}
         currentCurrency={store.currentCurrency}
         currentLang={store.currentLang as LanguageCode}
         cartCount={store.cart.reduce((acc, it) => acc + it.quantity, 0)}
@@ -372,6 +462,12 @@ export default function App() {
               featureDescription: 'Sign in or create an account to view and manage your cart.',
               targetView: 'cart'
             });
+            return;
+          }
+          if (!authState.isProfileComplete) {
+            setRedirectTarget('cart');
+            setActiveView('complete-profile');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
             return;
           }
           setIsCartOpen(true);
@@ -399,6 +495,17 @@ export default function App() {
             onNavigate={setActiveView}
             onSuccess={handleAuthSuccess}
           />
+        ) : showCompleteProfileGate ? (
+          <div className="space-y-4">
+            <div className="max-w-2xl mx-auto p-4 bg-amber-950/40 border border-amber-800/60 rounded-xl flex items-center gap-3 text-xs text-amber-200">
+              <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+              <div>
+                <p className="font-semibold text-amber-100">Please complete your profile before continuing.</p>
+                <p className="text-zinc-400 mt-0.5">The requested page ({activeView.replace(/-/g, ' ')}) requires a verified trader profile under AfCFTA compliance regulations.</p>
+              </div>
+            </div>
+            <CompleteProfileView onSuccess={handleCompleteProfileSuccess} />
+          </div>
         ) : (
           <>
             {/* 1. PUBLIC VIEWS */}
@@ -461,6 +568,12 @@ export default function App() {
                 onSuccess={() => {
                   setActiveView('seller');
                 }}
+              />
+            )}
+
+            {activeView === 'complete-profile' && (
+              <CompleteProfileView
+                onSuccess={handleCompleteProfileSuccess}
               />
             )}
 
