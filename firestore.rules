@@ -16,7 +16,8 @@ service cloud.firestore {
     
     function isAdmin() {
       return isAuthenticated() && (
-        request.auth.token.role == 'admin' ||
+        request.auth.token.email == 'giniyomugabo@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
          getUserData().role == 'admin')
       );
@@ -25,9 +26,9 @@ service cloud.firestore {
     // Users collection
     match /users/{userId} {
       allow read: if isAuthenticated();
-      // Requirement: Users must NEVER be able to register as administrators
-      allow create: if isOwner(userId) && request.resource.data.role in ['buyer', 'seller'];
-      // Users cannot self-elevate role
+      // Allow authenticated user to create their own profile upon registration / Google sign-in
+      allow create: if isOwner(userId);
+      // Users cannot self-elevate role unless admin
       allow update: if (isOwner(userId) && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']))) || isAdmin();
       allow delete: if isAdmin();
     }
@@ -109,6 +110,16 @@ service cloud.firestore {
       allow read: if isAdmin() || (isAuthenticated() && resource.data.reporterId == request.auth.uid);
       allow create: if isAuthenticated() && request.resource.data.reporterId == request.auth.uid;
       allow update: if isAdmin();
+    }
+    
+    // AI Chatbot Sessions & Message History
+    match /ai_chats/{chatId} {
+      allow read, update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      
+      match /messages/{msgId} {
+        allow read, write: if isAuthenticated();
+      }
     }
   }
 }

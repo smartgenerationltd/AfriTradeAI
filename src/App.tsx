@@ -109,6 +109,11 @@ export default function App() {
 
   // Navigate with view change and smooth scroll
   const navigateTo = (view: string, targetParam?: string) => {
+    // Prevent premature navigation while authentication state is loading
+    if (authState.loading) {
+      return;
+    }
+
     // Check if view is protected and user is unauthenticated
     if (!authState.isAuthenticated && !PUBLIC_VIEWS.has(view)) {
       setRedirectTarget(view);

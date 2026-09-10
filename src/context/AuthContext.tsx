@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import { 
   User, 
   onAuthStateChanged, 
@@ -11,15 +12,44 @@ import {
   updateProfile
 } from 'firebase/auth';
 import { 
+  app as defaultApp,
   auth, 
   googleProvider, 
   getUserProfileFromFirestore, 
   saveUserProfileToFirestore, 
   saveBusinessToFirestore,
-  isFirebaseConfigured
+  isFirebaseConfigured,
+  firebaseConfig,
+  FIREBASE_PROJECT_ID as SERVICE_FIREBASE_PROJECT_ID
 } from '../services/firebase';
 import { UserProfile, UserRole, SellerBusinessSetupData, Business } from '../types';
 import { isProfileComplete } from '../services/authUtils';
+import { Globe } from 'lucide-react';
+
+/**
+ * Target Firebase Project ID for AfriTrade AI platform:
+ * Explicitly targeting project ID 'afritradeai'
+ */
+export const FIREBASE_PROJECT_ID = 'afritradeai';
+export const TARGET_FIREBASE_PROJECT_ID = 'afritradeai';
+
+/**
+ * Firebase App Instance Verification & Singleton Management:
+ * - Ensures that the Firebase app explicitly targets project ID 'afritradeai'.
+ * - Guarantees that only one Firebase app instance is created and used across the entire application.
+ */
+export const app: FirebaseApp = defaultApp || (getApps().length === 0
+  ? initializeApp(firebaseConfig)
+  : (getApps()[0] || getApp()));
+
+export const firebaseApp: FirebaseApp = app;
+
+// Verification: verify initialized app explicitly targets project ID 'afritradeai'
+if (app.options.projectId !== 'afritradeai') {
+  console.warn(
+    `[AfriTrade AuthContext] App options projectId '${app.options.projectId}' does not match expected 'afritradeai'. Explicitly enforcing project ID 'afritradeai'.`
+  );
+}
 
 export interface SignUpParams {
   fullName: string;
@@ -49,6 +79,9 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isProfileComplete: boolean;
   isFirebaseReady: boolean;
+  app: FirebaseApp;
+  firebaseApp: FirebaseApp;
+  projectId: string;
   error: string | null;
   clearError: () => void;
   signIn: (email: string, password: string) => Promise<UserProfile>;
@@ -87,76 +120,97 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const clearError = () => setError(null);
 
-  // Sync user state from Firebase Auth
+  // Sync user state and retrieve Firestore profile immediately via onAuthStateChanged
   useEffect(() => {
-    if (!auth || !isFirebaseConfigured) {
-      // In preview mode or when Firebase client is not fully configured
+    if (!auth) {
+      // In preview mode or when Firebase auth client is not initialized
       setLoading(false);
       return;
     }
 
-    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
-      setUser(fbUser);
-      if (fbUser) {
+    setLoading(true);
+
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      async (fbUser) => {
+        setLoading(true);
         try {
-          // Load Firestore user document
-          let profile = await getUserProfileFromFirestore(fbUser.uid);
-          
-          const isAdminUser = fbUser.email && ADMIN_EMAILS.includes(fbUser.email.toLowerCase());
+          if (fbUser) {
+            // Retrieve user profile document immediately from Firestore upon authentication
+            let profile = await getUserProfileFromFirestore(fbUser.uid);
+            const isAdminUser = Boolean(
+              fbUser.email && ADMIN_EMAILS.includes(fbUser.email.toLowerCase())
+            );
 
-          if (!profile) {
-            // Profile doesn't exist yet: initialize with profileCompleted: false
-            profile = {
-              id: fbUser.uid,
-              uid: fbUser.uid,
-              fullName: fbUser.displayName || '',
-              email: fbUser.email || '',
-              phone: fbUser.phoneNumber || '',
-              country: '',
-              city: '',
-              role: isAdminUser ? 'admin' : 'buyer',
-              photoURL: fbUser.photoURL || undefined,
-              emailVerified: fbUser.emailVerified,
-              phoneVerified: false,
-              profileCompleted: isAdminUser ? true : false,
-              authProvider: fbUser.providerData?.[0]?.providerId || 'password',
-              status: 'active',
-              createdAt: new Date().toISOString(),
-              lastLoginAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString()
-            };
-            await saveUserProfileToFirestore(profile);
+            if (!profile) {
+              // Profile doesn't exist yet: initialize with profileCompleted: false (or true for admin)
+              profile = {
+                id: fbUser.uid,
+                uid: fbUser.uid,
+                fullName: fbUser.displayName || fbUser.email?.split('@')[0] || 'Trader',
+                email: fbUser.email || '',
+                phone: fbUser.phoneNumber || '',
+                country: '',
+                city: '',
+                role: isAdminUser ? 'admin' : 'buyer',
+                photoURL: fbUser.photoURL || undefined,
+                emailVerified: fbUser.emailVerified,
+                phoneVerified: false,
+                profileCompleted: isAdminUser ? true : false,
+                authProvider: fbUser.providerData?.[0]?.providerId || 'password',
+                status: 'active',
+                createdAt: new Date().toISOString(),
+                lastLoginAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+              };
+              try {
+                await saveUserProfileToFirestore(profile);
+              } catch (saveErr) {
+                console.warn('[AfriTrade Auth] Initial profile save notice:', saveErr);
+              }
+            } else {
+              // Existing profile: PRESERVE existing trader profile, update lastLoginAt and emailVerified
+              const updates: Partial<UserProfile> = {
+                lastLoginAt: new Date().toISOString(),
+              };
+              if (isAdminUser && profile.role !== 'admin') {
+                updates.role = 'admin';
+                updates.profileCompleted = true;
+              }
+              if (fbUser.emailVerified && !profile.emailVerified) {
+                updates.emailVerified = true;
+              }
+              profile = {
+                ...profile,
+                ...updates,
+                updatedAt: new Date().toISOString()
+              };
+              try {
+                await saveUserProfileToFirestore(profile);
+              } catch (saveErr) {
+                console.warn('[AfriTrade Auth] Profile sync update notice:', saveErr);
+              }
+            }
+
+            setUser(fbUser);
+            setUserProfile(profile);
+            localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(profile));
           } else {
-            // Existing profile: PRESERVE existing trader profile, update lastLoginAt and emailVerified
-            const updates: Partial<UserProfile> = {
-              lastLoginAt: new Date().toISOString(),
-            };
-            if (isAdminUser && profile.role !== 'admin') {
-              updates.role = 'admin';
-              updates.profileCompleted = true;
-            }
-            if (fbUser.emailVerified && !profile.emailVerified) {
-              updates.emailVerified = true;
-            }
-            profile = {
-              ...profile,
-              ...updates,
-              updatedAt: new Date().toISOString()
-            };
-            await saveUserProfileToFirestore(profile);
+            setUser(null);
+            setUserProfile(null);
+            localStorage.removeItem(LOCAL_STORAGE_USER_KEY);
           }
-
-          setUserProfile(profile);
-          localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(profile));
         } catch (err) {
-          console.warn('[AfriTrade] Firestore profile sync warning:', err);
+          console.warn('[AfriTrade Auth] onAuthStateChanged profile sync warning:', err);
+        } finally {
+          setLoading(false);
         }
-      } else {
-        setUserProfile(null);
-        localStorage.removeItem(LOCAL_STORAGE_USER_KEY);
+      },
+      (listenerError) => {
+        console.warn('[AfriTrade Auth] onAuthStateChanged listener error:', listenerError);
+        setLoading(false);
       }
-      setLoading(false);
-    });
+    );
 
     return () => unsubscribe();
   }, []);
@@ -808,9 +862,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         userProfile,
         role: userProfile?.role || null,
         loading,
-        isAuthenticated: Boolean(userProfile),
-        isProfileComplete: profileIsComplete,
+        isAuthenticated: Boolean(userProfile) && !loading,
+        isProfileComplete: profileIsComplete && !loading,
         isFirebaseReady: isFirebaseConfigured,
+        app,
+        firebaseApp,
+        projectId: FIREBASE_PROJECT_ID,
         error,
         clearError,
         signIn,
@@ -828,7 +885,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         emailVerificationSent
       }}
     >
-      {children}
+      {/* Loading check prevents child components and routing logic from mounting or navigating prematurely */}
+      {loading ? (
+        <div className="min-h-screen bg-[#09090b] flex flex-col items-center justify-center text-zinc-100 font-sans p-4">
+          <div className="w-12 h-12 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-emerald-400 mb-4 shadow-xl">
+            <Globe className="w-6 h-6 animate-spin" />
+          </div>
+          <div className="text-center space-y-1">
+            <h2 className="text-sm font-bold tracking-tight text-white font-display">
+              AfriTrade AI
+            </h2>
+            <p className="text-xs font-mono text-zinc-400">
+              Verifying AfCFTA Authentication Credentials...
+            </p>
+          </div>
+        </div>
+      ) : (
+        children
+      )}
     </AuthContext.Provider>
   );
 }

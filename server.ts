@@ -17,8 +17,260 @@ function getGeminiClient(): GoogleGenAI | null {
   if (!apiKey || apiKey.trim() === '' || apiKey === 'MY_GEMINI_API_KEY') {
     return null;
   }
-  return new GoogleGenAI({ apiKey });
+  return new GoogleGenAI({ 
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build'
+      }
+    }
+  });
 }
+
+// Multi-turn Chat Endpoint with Task-Based Models & Roles
+app.post('/api/ai/chat', async (req, res) => {
+  try {
+    const { 
+      messages = [], 
+      taskType = 'general', 
+      role = 'general_assistant',
+      useSearch = false,
+      useMaps = false,
+      userLocation
+    } = req.body;
+
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: 'Messages array is required' });
+    }
+
+    const ai = getGeminiClient();
+
+    // Specific roles system instructions
+    const roleInstructions: Record<string, string> = {
+      afcfta_specialist: `You are the Chief AfCFTA (African Continental Free Trade Area) Legal & Tariff Specialist on AfriTrade AI.
+Your role: Provide expert legal, tariff schedule, and documentation guidance on intra-African trade under AfCFTA and Regional Economic Communities (EAC, ECOWAS, SADC, COMESA, AMU).
+Focus areas: Rules of Origin criteria, preferential tariff concessions, Guided Trade Initiative (GTI), non-tariff barriers (NTBs), and dispute mitigation.
+Tone: Authoritative, structured, and legally conscious.
+Notice: Always advise verifying with national revenue authorities and trade ministries before shipment.`,
+
+      logistics_advisor: `You are the Pan-African Cross-Border Logistics & Trade Corridor Coordinator on AfriTrade AI.
+Your role: Provide tactical logistics guidance across major African trade corridors (Northern Corridor, Central Corridor, Abidjan-Lagos Corridor, Trans-Kalahari, North-South Corridor).
+Focus areas: Transit times, One-Stop Border Posts (OSBPs), multimodal freight (road, rail, air cargo, sea ports like Mombasa, Dar es Salaam, Tema, Durban, Walvis Bay), cold chain handling, and authorized freight forwarding.
+Tone: Practical, efficiency-focused, and operational.`,
+
+      customs_broker: `You are a Licensed African Customs & Standards Specialist on AfriTrade AI.
+Your role: Advise traders on harmonized system (HS) classification, Single Customs Territory (SCT) declarations, mandatory standards certifications (KEBS, RSB, UNBS, SON, SABS), phytosanitary inspection, and pre-export verification of conformity (PVoC).
+Focus areas: Border clearance checklists, valuation, import/export duties, and avoiding demurrage penalties.
+Tone: Meticulous, procedural, and compliance-driven.`,
+
+      market_analyst: `You are an African Commodity & Market Intelligence Analyst on AfriTrade AI.
+Your role: Analyze wholesale, retail, and agro-commodity market trends across Africa.
+Focus areas: Cross-border supply-demand imbalances, high-margin export commodities (coffee, tea, cocoa, shea butter, horticulture, minerals, textiles), competitive pricing, and buyer matchmaking.
+Tone: Strategic, data-oriented, and commercially savvy.`,
+
+      general_assistant: `You are AfriTrade AI, the intelligent Pan-African cross-border trade companion.
+Your mission is: "Trade Africa. Grow Africa."
+Your role: Help African entrepreneurs, MSMEs, exporters, and buyers seamlessly navigate trade opportunities, regional integration frameworks, trade calculations, and commercial partnerships across the continent.
+Tone: Professional, inspiring, and actionable.`
+    };
+
+    const systemInstruction = roleInstructions[role] || roleInstructions.general_assistant;
+
+    // Model selection per requirements:
+    // - Complex tasks: gemini-3.1-pro-preview
+    // - General tasks: gemini-3.5-flash
+    // - Fast tasks: gemini-3.1-flash-lite
+    // - If search or maps grounding is enabled: must use gemini-3.5-flash
+    let modelName = 'gemini-3.5-flash';
+    if (useSearch || useMaps) {
+      modelName = 'gemini-3.5-flash';
+    } else if (taskType === 'complex') {
+      modelName = 'gemini-3.1-pro-preview';
+    } else if (taskType === 'fast') {
+      modelName = 'gemini-3.1-flash-lite';
+    } else {
+      modelName = 'gemini-3.5-flash';
+    }
+
+    if (!ai) {
+      return res.json({
+        text: `### 🌍 Trade Advisory Response (Demo Mode)\n\nThank you for your inquiry regarding intra-African commerce. Based on your selected specialist role (**${role.replace('_', ' ').toUpperCase()}**) and task profile, intra-regional trade under AfCFTA protocols offers substantial tariff reductions for certified goods.\n\nKey Recommendations:\n1. Verify your product's 6-digit Harmonized System (HS) code.\n2. Confirm the origin documentation with your national export council.\n3. Estimate landed costs with our Trade Calculator.\n\n*Notice: Verify current requirements with the relevant customs or trade authority.*`,
+        modelUsed: modelName,
+        groundingChunks: [],
+        webSearchQueries: [],
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Format contents for multi-turn conversation
+    const contents = messages.map((m: any) => ({
+      role: m.role === 'model' || m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: typeof m.content === 'string' ? m.content : (m.text || '') }]
+    }));
+
+    const config: any = {
+      systemInstruction,
+      temperature: taskType === 'complex' ? 0.2 : 0.6,
+    };
+
+    if (useSearch) {
+      config.tools = [{ googleSearch: {} }];
+    } else if (useMaps) {
+      config.tools = [{ googleMaps: {} }];
+      if (userLocation && userLocation.latitude && userLocation.longitude) {
+        config.toolConfig = {
+          retrievalConfig: {
+            latLng: {
+              latitude: Number(userLocation.latitude),
+              longitude: Number(userLocation.longitude)
+            }
+          }
+        };
+      }
+    }
+
+    const response = await ai.models.generateContent({
+      model: modelName,
+      contents,
+      config
+    });
+
+    const responseText = response.text || '';
+    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+    const webSearchQueries = response.candidates?.[0]?.groundingMetadata?.webSearchQueries || [];
+
+    res.json({
+      text: responseText,
+      modelUsed: modelName,
+      groundingChunks,
+      webSearchQueries,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error: any) {
+    console.error('Error in /api/ai/chat:', error);
+    res.status(500).json({ 
+      error: 'Failed to generate chat response', 
+      details: error.message 
+    });
+  }
+});
+
+// Dedicated Google Search Grounding Endpoint (uses gemini-3.5-flash with googleSearch)
+app.post('/api/ai/search-grounding', async (req, res) => {
+  try {
+    const { query } = req.body;
+    if (!query) {
+      return res.status(400).json({ error: 'Search query is required' });
+    }
+
+    const ai = getGeminiClient();
+    const model = 'gemini-3.5-flash';
+
+    if (!ai) {
+      return res.json({
+        text: `### 🔍 Live Trade Intelligence: ${query}\n\nCross-border trading indices and agricultural commodities continue to show rising intra-African volumes across EAC, ECOWAS, and SADC under AfCFTA protocols. Real-time pricing indicates steady regional demand for quality-certified exports.`,
+        groundingChunks: [
+          { web: { uri: 'https://afcfta.au.int', title: 'AfCFTA Secretariat Official Portal' } },
+          { web: { uri: 'https://www.eac.int', title: 'East African Community Trade Portal' } }
+        ],
+        webSearchQueries: [query],
+        model,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const systemInstruction = `You are AfriTrade Live Market Intelligence. Use Google Search grounding to retrieve current real-world African trade information, regulatory announcements, currency rates, border developments, and export commodity trends.
+Structure answers cleanly with key takeaways, verified facts, and actionable trade advice.`;
+
+    const response = await ai.models.generateContent({
+      model,
+      contents: query,
+      config: {
+        systemInstruction,
+        tools: [{ googleSearch: {} }]
+      }
+    });
+
+    const text = response.text || '';
+    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+    const webSearchQueries = response.candidates?.[0]?.groundingMetadata?.webSearchQueries || [];
+
+    res.json({
+      text,
+      groundingChunks,
+      webSearchQueries,
+      model,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err: any) {
+    console.error('Error in /api/ai/search-grounding:', err);
+    res.status(500).json({ error: 'Search grounding failed', details: err.message });
+  }
+});
+
+// Dedicated Google Maps Grounding Endpoint (uses gemini-3.5-flash with googleMaps)
+app.post('/api/ai/maps-grounding', async (req, res) => {
+  try {
+    const { query, latitude, longitude } = req.body;
+    if (!query) {
+      return res.status(400).json({ error: 'Location or trade hub query is required' });
+    }
+
+    const ai = getGeminiClient();
+    const model = 'gemini-3.5-flash';
+
+    if (!ai) {
+      return res.json({
+        text: `### 📍 Trade Corridors & Logistics Locations: ${query}\n\nKey African transit hubs and border facilities include major maritime gateways and One-Stop Border Posts (OSBP) supporting regional commerce along Northern and Central transit corridors.`,
+        groundingChunks: [
+          { maps: { uri: 'https://maps.google.com/?q=Mombasa+Port', title: 'Port of Mombasa, Kenya' } },
+          { maps: { uri: 'https://maps.google.com/?q=Gatuna+Border+Post', title: 'Gatuna / Katuna One-Stop Border Post (Rwanda-Uganda)' } }
+        ],
+        model,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const systemInstruction = `You are AfriTrade Maps Logistics Advisor. Use Google Maps grounding to locate ports, One-Stop Border Posts (OSBP), customs clearance yards, dry ports, freight terminals, and logistics corridors across Africa.
+Provide clear location descriptions, operational context, nearest cities, and corridor connectivity.`;
+
+    const config: any = {
+      systemInstruction,
+      tools: [{ googleMaps: {} }]
+    };
+
+    if (latitude && longitude) {
+      config.toolConfig = {
+        retrievalConfig: {
+          latLng: {
+            latitude: Number(latitude),
+            longitude: Number(longitude)
+          }
+        }
+      };
+    }
+
+    const response = await ai.models.generateContent({
+      model,
+      contents: query,
+      config
+    });
+
+    const text = response.text || '';
+    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+
+    res.json({
+      text,
+      groundingChunks,
+      model,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err: any) {
+    console.error('Error in /api/ai/maps-grounding:', err);
+    res.status(500).json({ error: 'Maps grounding failed', details: err.message });
+  }
+});
 
 // 1. Health check
 app.get('/api/health', (req, res) => {

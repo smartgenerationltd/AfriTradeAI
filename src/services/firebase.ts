@@ -4,15 +4,45 @@ import {
   db, 
   googleProvider, 
   firebaseConfig, 
-  isFirebaseConfigured 
+  isFirebaseConfigured,
+  FIREBASE_PROJECT_ID 
 } from '../lib/firebase/client';
 import { 
   doc, 
   getDoc, 
   setDoc, 
-  updateDoc 
+  updateDoc,
+  collection,
+  query,
+  where,
+  getDocs,
+  deleteDoc
 } from 'firebase/firestore';
 import { UserProfile, Business } from '../types';
+
+export interface AIChatMessage {
+  id: string;
+  role: 'user' | 'model';
+  content: string;
+  timestamp: string;
+  modelUsed?: string;
+  groundingChunks?: Array<{
+    web?: { uri: string; title: string };
+    maps?: { uri: string; title: string; placeAnswerSources?: { reviewSnippets?: Array<{ text: string }> } };
+  }>;
+  webSearchQueries?: string[];
+}
+
+export interface AIChatSession {
+  id: string;
+  userId: string;
+  title: string;
+  role: string;
+  taskType: 'complex' | 'general' | 'fast';
+  messages: AIChatMessage[];
+  createdAt: string;
+  updatedAt: string;
+}
 
 export enum OperationType {
   CREATE = 'create',
@@ -54,7 +84,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 export async function getUserProfileFromFirestore(userId: string): Promise<UserProfile | null> {
   if (!db || !isFirebaseConfigured) {
     try {
-      const saved = localStorage.getItem('afritrade_auth_user');
+      const saved = localStorage.getItem('afritrade_auth_user_profile') || localStorage.getItem('afritrade_auth_user');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed?.id === userId || parsed?.uid === userId) {
@@ -178,4 +208,110 @@ export async function saveBusinessToFirestore(business: Business): Promise<void>
   }
 }
 
-export { app, auth, db, googleProvider, firebaseConfig, isFirebaseConfigured };
+/**
+ * Persists an AI multi-turn chat session into Firestore under `ai_chats/{chatId}`
+ */
+export async function saveChatSessionToFirestore(session: AIChatSession): Promise<void> {
+  if (!session.id) return;
+
+  // Local storage cache fallback
+  try {
+    const key = `afritrade_ai_chat_${session.id}`;
+    localStorage.setItem(key, JSON.stringify(session));
+    const allSessionsKey = 'afritrade_ai_chat_sessions';
+    const existingStr = localStorage.getItem(allSessionsKey);
+    const existingList: AIChatSession[] = existingStr ? JSON.parse(existingStr) : [];
+    const idx = existingList.findIndex(s => s.id === session.id);
+    if (idx >= 0) {
+      existingList[idx] = session;
+    } else {
+      existingList.unshift(session);
+    }
+    localStorage.setItem(allSessionsKey, JSON.stringify(existingList.slice(0, 30)));
+  } catch (e) {
+    console.warn('Failed to cache chat session locally:', e);
+  }
+
+  // Firestore persistence
+  if (db && isFirebaseConfigured && session.userId) {
+    const docPath = `ai_chats/${session.id}`;
+    try {
+      const chatDocRef = doc(db, 'ai_chats', session.id);
+      await setDoc(chatDocRef, {
+        id: session.id,
+        userId: session.userId,
+        title: session.title,
+        role: session.role,
+        taskType: session.taskType,
+        messages: session.messages,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      }, { merge: true });
+      console.info(`[AfriTrade Firestore] Saved AI chat session to ${docPath}`);
+    } catch (err) {
+      console.warn(`[AfriTrade Firestore] Notice: Error writing to ${docPath}:`, err);
+    }
+  }
+}
+
+/**
+ * Loads previous chat sessions for the current user
+ */
+export async function getUserChatSessionsFromFirestore(userId: string): Promise<AIChatSession[]> {
+  const localSessions: AIChatSession[] = [];
+  try {
+    const existingStr = localStorage.getItem('afritrade_ai_chat_sessions');
+    if (existingStr) {
+      localSessions.push(...JSON.parse(existingStr));
+    }
+  } catch (e) {
+    console.warn('Failed to read local chat sessions:', e);
+  }
+
+  if (!db || !isFirebaseConfigured || !userId) {
+    return localSessions;
+  }
+
+  try {
+    const q = query(collection(db, 'ai_chats'), where('userId', '==', userId));
+    const snapshot = await getDocs(q);
+    const remoteSessions: AIChatSession[] = [];
+    snapshot.forEach((docSnap) => {
+      remoteSessions.push(docSnap.data() as AIChatSession);
+    });
+
+    // Sort by updatedAt descending
+    remoteSessions.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    return remoteSessions.length > 0 ? remoteSessions : localSessions;
+  } catch (err) {
+    console.warn('[AfriTrade Firestore] Unable to fetch user chat sessions from Firestore, using local cache:', err);
+    return localSessions;
+  }
+}
+
+/**
+ * Deletes a chat session from Firestore and local storage
+ */
+export async function deleteChatSessionFromFirestore(chatId: string): Promise<void> {
+  try {
+    localStorage.removeItem(`afritrade_ai_chat_${chatId}`);
+    const existingStr = localStorage.getItem('afritrade_ai_chat_sessions');
+    if (existingStr) {
+      const list: AIChatSession[] = JSON.parse(existingStr);
+      const filtered = list.filter(s => s.id !== chatId);
+      localStorage.setItem('afritrade_ai_chat_sessions', JSON.stringify(filtered));
+    }
+  } catch (e) {
+    console.warn('Error clearing local chat cache:', e);
+  }
+
+  if (db && isFirebaseConfigured) {
+    try {
+      await deleteDoc(doc(db, 'ai_chats', chatId));
+    } catch (err) {
+      console.warn('Error deleting chat from Firestore:', err);
+    }
+  }
+}
+
+export { app, auth, db, googleProvider, firebaseConfig, isFirebaseConfigured, FIREBASE_PROJECT_ID };
